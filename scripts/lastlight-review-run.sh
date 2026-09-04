@@ -190,7 +190,7 @@ main() {
     # silently ignored in -p mode, which would leave a reviewer holding
     # unrestricted Bash with no confinement at all. Never infer the sandbox
     # from having asked for it.
-    if sandbox_verify "$settings_file"; then
+    if sandbox_verify "$settings_file" "$workspace"; then
       printf '  isolated workspace: %s (containment verified, probes enabled)\n' "$workspace" >&2
     else
       die "the sandbox did not engage -- a canary escaped the workspace. Refusing to run a probe-enabled review unconfined. Re-run with LASTLIGHT_REVIEW_SANDBOX=off for a read-only review."

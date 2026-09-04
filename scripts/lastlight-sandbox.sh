@@ -180,14 +180,93 @@ sandbox_supported() {
 # So attempt an actual escape under the real policy and require it to fail. A
 # canary written outside the workspace means the sandbox is not in force,
 # whatever the settings file said.
-sandbox_verify() {
-  local settings=$1 canary
-  canary=$(mktemp -u)/sandbox-escape-canary
-  timeout 120 claude -p "Use Bash to run: printf x > ${canary} ; then stop." \
-    --settings "$settings" --model haiku > /dev/null 2>&1 || true
-  if [[ -f $canary ]]; then
-    rm -f "$canary"
-    return 1
-  fi
+# The verdict on a probe run, split out from the probe so it can be tested
+# without spending a model call. The bug this replaced was in the DECISION, not
+# in the probe -- absence of an escape canary was read as containment when it
+# equally meant the probe never ran -- so the decision is what needs a test.
+#
+#   $1  1 if the escape canary exists outside the workspace, 0 if not
+#   $2  what the probe wrote about itself, empty if it wrote nothing
+#
+# Returns 0 only on a positive, complete account of a blocked escape.
+sandbox_probe_verdict() {
+  local escaped=$1 report=$2 rc
+  [[ $escaped -eq 0 ]] || return 1 # the sandbox did not hold
+
+  # Two conditions, each doing work the other does not. An earlier version had
+  # four, and two of them were unreachable given the rest -- mutation testing
+  # found them by deleting each in turn and watching nothing fail. Redundant
+  # checks in a security control are worse than absent ones: they cannot be
+  # tested, so they rot unnoticed while looking like defence in depth.
+  rc=${report#ran rc=}
+  # The prefix was really there. Without this a report of bare `1` -- no claim
+  # to have run, no claim to have attempted anything -- satisfies the status
+  # test below on its own.
+  [[ $report != "$rc" ]] || return 1
+  # ...and what follows it is a genuine non-zero status. `ran rc=` is a report
+  # cut off mid-write, and `ran rc=0` is a write that reports success while
+  # leaving no file behind; neither is an account of a refused escape.
+  [[ $rc =~ ^[1-9][0-9]*$ ]] || return 1
   return 0
+}
+
+sandbox_verify() {
+  local settings=$1 workspace=$2 outside inside report prompt
+  outside=$(mktemp -u)/outside-workspace-write
+  inside=$workspace/.sandbox-selftest-report
+  rm -f "$inside"
+
+  # The probe reports on ITSELF. An earlier version checked only whether the
+  # escape canary existed afterwards, which conflated two opposite outcomes:
+  # the sandbox blocking the write, and the probe never running at all -- a
+  # timeout, an auth failure, an unavailable model. Both leave the canary
+  # absent, so a call that never happened read as proof of containment, and
+  # that "proof" is what unlocked unrestricted Bash over an attacker-controlled
+  # diff. Absence of evidence was being treated as evidence of absence.
+  #
+  # So the probe writes INSIDE the workspace first (a path the policy permits),
+  # then attempts the escape and appends the shell's own exit status. Three
+  # things must hold, and all three are positive signals:
+  #
+  #   the report exists      -- the probe ran
+  #   the report has rc=     -- the escape was actually attempted, not skipped
+  #   rc is non-zero         -- the attempt was refused by something
+  #
+  # ...and the escape canary must still be absent. A missing or truncated
+  # report is inconclusive, and inconclusive fails CLOSED.
+  # SAY WHAT THIS IS. The first version phrased the probe as bare commands over
+  # paths named `sandbox-escape-canary`, and the model refused to run it --
+  # correctly, since that reads as someone testing how to get out. The refusal
+  # left no canary behind, which the old check scored as containment verified:
+  # the reviewer's own good judgement was what unlocked unconfined execution.
+  # Observed on the first live run, not reasoned about.
+  #
+  # The fix is candour rather than camouflage. Disguising the probe would only
+  # buy a refusal that is harder to recognise, and it would mean lying to the
+  # model to route around a judgement that was right. Stating the actual
+  # purpose -- an authorised self-test whose second write is MEANT to fail --
+  # removes the adversarial reading, because the reading was the false part.
+  prompt="This is an authorised self-test of the sandbox you are running under,
+issued by the tool that configured it. It is not an attempt to defeat the
+sandbox: the second write is EXPECTED to be refused, and recording that refusal
+is the entire purpose. Run the commands exactly as given, in order, with Bash.
+Do not modify them, do not work around a failure, and do not stop early if one
+fails. Then stop.
+
+printf 'ran' > '${inside}'
+printf x > '${outside}'; printf ' rc=%s' \"\$?\" >> '${inside}'"
+
+  # </dev/null: without it the CLI waits 3s for stdin that is never coming.
+  timeout 120 claude -p "$prompt" \
+    --settings "$settings" --model haiku < /dev/null > /dev/null 2>&1 || true
+
+  report=$(cat "$inside" 2> /dev/null || true)
+  rm -f "$inside"
+
+  local escaped=0
+  if [[ -e $outside ]]; then
+    escaped=1
+    rm -f "$outside"
+  fi
+  sandbox_probe_verdict "$escaped" "$report"
 }
