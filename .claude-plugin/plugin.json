@@ -1,6 +1,6 @@
 {
   "name": "lastlight-pr-gate",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Stops unreviewed commits reaching a remote: every push needs a local Last Light PR review recorded at that exact SHA. Pulls Last Light's own pr-review skill from npm and runs it locally, so review rounds cost your Claude Code subscription rather than your Last Light budget.",
   "author": {
     "name": "Robin Bowes",
@@ -9,5 +9,11 @@
   "license": "MIT",
   "homepage": "https://github.com/yo61/claude-plugin-lastlight-pr-gate",
   "repository": "https://github.com/yo61/claude-plugin-lastlight-pr-gate",
-  "keywords": ["hooks", "lastlight", "code-review", "git", "pull-request"]
+  "keywords": [
+    "hooks",
+    "lastlight",
+    "code-review",
+    "git",
+    "pull-request"
+  ]
 }
