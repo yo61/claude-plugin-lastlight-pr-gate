@@ -101,3 +101,9 @@ jobs:
       # comment until something re-runs them.
       - name: sandbox policy suite
         run: SANDBOX="$PWD/scripts/lastlight-sandbox.sh" bash tests/lastlight-sandbox.test.sh
+
+      # The work sandbox is the one script that hands a session Bash AND the
+      # file-editing tools against the real filesystem, so a rule quietly
+      # dropped here costs more than anywhere else in this repo.
+      - name: work sandbox suite
+        run: WORK="$PWD/scripts/lastlight-work-sandbox.sh" bash tests/lastlight-work-sandbox.test.sh

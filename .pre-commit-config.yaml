@@ -73,6 +73,13 @@ repos:
         pass_filenames: false
         files: '^(scripts|tests)/.*\.sh$'
 
+      - id: work-sandbox-tests
+        name: work sandbox suite
+        entry: env WORK=./scripts/lastlight-work-sandbox.sh bash tests/lastlight-work-sandbox.test.sh
+        language: system
+        pass_filenames: false
+        files: '^(scripts|tests)/.*\.sh$'
+
   - repo: https://github.com/alessandrojcm/commitlint-pre-commit-hook
     rev: v9.26.0
     hooks:
