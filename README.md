@@ -61,11 +61,27 @@ the local pass runs at the same tier as the server's rather than inheriting
 whatever the invoking session used. Override with `--model <m>` or
 `LASTLIGHT_REVIEW_MODEL`; the resolved value is recorded in the attestation.
 
-**The reviewed diff is untrusted input.** Writes are scoped to the single
-`findings.json` path, because an injected instruction in a reviewed file could
-otherwise overwrite the gate script itself and silently disable it. Reads are
-not scoped — the reviewer must read the repo — so treat exfiltration as the
-residual risk and do not review a diff you would not run code from.
+**The reviewed diff is untrusted input**, so the review runs in a disposable
+`git clone` of HEAD under the built-in OS sandbox: writes confined to that
+workspace, credential stores denied for reading, and egress restricted to the
+API. Because the blast radius is bounded structurally, the reviewer gets Bash
+and can run **probes** — installing a dependency, executing a test — which is
+what the skill intends and what catches bugs that reading alone does not.
+
+Inside the workspace the reviewer may write anything; the guarantee is that
+**only `findings.json` is copied back out**, and nothing it writes can reach
+your real repository. That is a different property from "writes are scoped to
+one path", which describes only the unsandboxed fallback below.
+
+The containment is **verified, not assumed**: a settings file that fails
+validation is silently ignored in `-p` mode, so before granting Bash the runner
+attempts an actual escape under the real policy and refuses to proceed if the
+canary survives.
+
+`LASTLIGHT_REVIEW_SANDBOX=off`, or a platform with no sandbox, falls back to a
+read-only tool list with writes scoped to `findings.json` and **no probes**.
+That is a weaker review, not an equivalent one — findings then rest on reading
+rather than execution — so the attestation records which posture produced it.
 
 **Pass bar:** `findings: []`, or every finding dismissed in
 `.lastlight/pr-review/dismissed.json` as `{"<title>": "reason"}`, each reason at

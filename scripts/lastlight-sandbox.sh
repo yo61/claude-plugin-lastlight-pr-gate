@@ -109,3 +109,30 @@ sandbox_supported() {
     *) return 1 ;;
   esac
 }
+
+# PROVE the confinement engaged, before trusting it.
+#
+# `claude -p --help`: "Settings files that fail validation are SILENTLY IGNORED
+# in this mode (no error dialog is shown)." Verified empirically -- a settings
+# file with a misspelled key runs the session anyway, unconfined and unremarked.
+#
+# That makes "we passed --settings" worthless as evidence. The tool grant and
+# the sandbox are independent mechanisms: `--allowed-tools Bash` is a CLI flag
+# that applies regardless, so a silently-ignored settings file yields a reviewer
+# with unrestricted Bash and NO confinement -- a fail-open in the one control
+# that makes probes safe.
+#
+# So attempt an actual escape under the real policy and require it to fail. A
+# canary written outside the workspace means the sandbox is not in force,
+# whatever the settings file said.
+sandbox_verify() {
+  local settings=$1 canary
+  canary=$(mktemp -u)/sandbox-escape-canary
+  timeout 120 claude -p "Use Bash to run: printf x > ${canary} ; then stop." \
+    --settings "$settings" --model haiku > /dev/null 2>&1 || true
+  if [[ -f $canary ]]; then
+    rm -f "$canary"
+    return 1
+  fi
+  return 0
+}

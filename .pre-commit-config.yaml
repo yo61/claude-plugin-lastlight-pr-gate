@@ -59,6 +59,13 @@ repos:
         pass_filenames: false
         files: '^(scripts|tests)/.*\.sh$'
 
+      - id: sandbox-tests
+        name: sandbox policy suite
+        entry: env SANDBOX=./scripts/lastlight-sandbox.sh bash tests/lastlight-sandbox.test.sh
+        language: system
+        pass_filenames: false
+        files: '^(scripts|tests)/.*\.sh$'
+
       - id: recorder-tests
         name: recorder test suite
         entry: env RECORD=./scripts/lastlight-review-record.sh bash tests/lastlight-review-record.test.sh

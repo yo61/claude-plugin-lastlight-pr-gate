@@ -96,3 +96,8 @@ jobs:
       # so it gets its own coverage rather than riding on the gate's.
       - name: recorder test suite
         run: RECORD="$PWD/scripts/lastlight-review-record.sh" bash tests/lastlight-review-record.test.sh
+
+      # Pins the isolation policy. The header's hand-verified controls are a
+      # comment until something re-runs them.
+      - name: sandbox policy suite
+        run: SANDBOX="$PWD/scripts/lastlight-sandbox.sh" bash tests/lastlight-sandbox.test.sh
