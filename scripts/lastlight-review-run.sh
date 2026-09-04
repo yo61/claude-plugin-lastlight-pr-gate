@@ -211,7 +211,12 @@ main() {
   # Sandboxed, the tool allowlist stops being the security boundary -- the
   # sandbox is -- so the reviewer gets Bash and can run things. Unsandboxed it
   # stays the narrow read-only list, because then it IS the only boundary.
-  if [[ -n $workspace ]]; then
+  #
+  # An explicit LASTLIGHT_REVIEW_TOOLS still wins. Widening happened
+  # unconditionally when sandboxed, which is the default on any machine with a
+  # sandbox available -- so the documented override was discarded in the common
+  # case, without a word, including when it was set to NARROW the reviewer.
+  if [[ -n $workspace && -z ${LASTLIGHT_REVIEW_TOOLS:-} ]]; then
     tools=(Read Grep Glob Bash)
   fi
   # The ONE write the contract needs, scoped to exactly that path. Appended
