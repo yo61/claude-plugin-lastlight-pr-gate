@@ -16,7 +16,12 @@ fail=0
 TMP=$(mktemp -d)
 REPO=$TMP/repo
 mkdir -p "$REPO"
-git init -q "$REPO"
+# `-b main` explicitly: without it the branch name comes from the machine's
+# `init.defaultBranch`, which is `main` locally and `master` on a GitHub runner.
+# The cases below name `main`, so inheriting `master` made one of them
+# unresolvable (fail-closed deny) and another pass for the wrong reason. A test
+# declares its environment rather than inheriting it.
+git init -q -b main "$REPO"
 git -C "$REPO" config user.email t@t
 git -C "$REPO" config user.name t
 echo x > "$REPO/f.txt"
