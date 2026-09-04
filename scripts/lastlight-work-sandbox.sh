@@ -38,7 +38,7 @@
 #       `Edit(/tmp/x/**)` matches nothing and denies nothing.
 #
 # ENVIRONMENT
-#   LASTLIGHT_WORK_ROOT      where workspaces live (default ~/.claude/work)
+#   LASTLIGHT_WORK_ROOT      where workspaces live (default ~/.lastlight/work)
 #   LASTLIGHT_WORK_VERIFY    `off` skips the containment proof (not advised)
 #   LASTLIGHT_WORK_EGRESS    extra comma-separated domains the session may reach
 set -euo pipefail
@@ -48,7 +48,13 @@ readonly SELF_DIR
 # shellcheck source=/dev/null
 source "$SELF_DIR/lastlight-sandbox.sh"
 
-readonly WORK_ROOT=${LASTLIGHT_WORK_ROOT:-$HOME/.claude/work}
+# NOT under ~/.claude. That was the default, and ~/.claude is denied whole so a
+# session cannot edit the hooks watching it -- which made every workspace a
+# subtree of its own deny rule. Deny beats allow regardless of specificity, so
+# the Edit tool was refused throughout the session's own workspace, and a
+# script whose whole premise is that "a work session lives on Write and Edit"
+# was unusable by default.
+readonly WORK_ROOT=${LASTLIGHT_WORK_ROOT:-$HOME/.lastlight/work}
 
 die() {
   printf 'lastlight-work-sandbox: %s\n' "$1" >&2
@@ -100,6 +106,20 @@ slot_for() {
 edit_denied_paths() {
   sandbox_denied_reads
   printf '%s\n' "$HOME/.claude"
+}
+
+# Whether a workspace sits inside a tree the policy denies editing.
+#
+# Changing the default was not enough on its own: any LASTLIGHT_WORK_ROOT can
+# be pointed somewhere denied, and the failure is invisible until the session
+# tries its first edit. Refusing up front turns a confusing session into a
+# message.
+workspace_is_denied() {
+  local ws=$1 p
+  while IFS= read -r p; do
+    [[ $ws == "$p" || $ws == "$p"/* ]] && return 0
+  done < <(edit_denied_paths)
+  return 1
 }
 
 # The policy a work session runs under: the OS sandbox for spawned processes,
@@ -155,15 +175,21 @@ work_allowed_domains() {
 #   $1 escaped_bash  1 if a spawned process wrote outside the workspace
 #   $2 escaped_edit  1 if a file-editing tool wrote into the real repository
 #   $3 report        what the probe wrote about itself inside the workspace
+#   $4 edit_worked   1 if a file-editing tool COULD write inside the workspace
 #
 # Liveness is the reason the report exists at all. Checking only that the two
 # escapes are absent scores a probe that never ran -- a timeout, an auth
 # failure -- as containment proven, which is the fail-open this whole file
 # exists to avoid. Silence is not a result.
 work_probe_verdict() {
-  local escaped_bash=$1 escaped_edit=$2 report=$3 rc
+  local escaped_bash=$1 escaped_edit=$2 report=$3 edit_worked=$4 rc
   [[ $escaped_bash -eq 0 ]] || return 1
   [[ $escaped_edit -eq 0 ]] || return 1
+  # A policy can be wrong in two directions. This probe only ever tested that
+  # forbidden things fail, so a policy that ALSO forbade the permitted ones --
+  # every edit inside the workspace, when the work root sat under a denied
+  # tree -- passed verification and broke on the session's first edit.
+  [[ $edit_worked -eq 1 ]] || return 1
   rc=${report#ran rc=}
   [[ $report != "$rc" ]] || return 1
   [[ $rc =~ ^[1-9][0-9]*$ ]] || return 1
@@ -181,12 +207,14 @@ work_probe_verdict() {
 # keeps a refusal from looking like a pass.
 work_verify() {
   local settings=$1 ws=$2 root=$3
-  local outside inside repo_target report escaped_bash=0 escaped_edit=0 prompt
+  local outside inside repo_target edit_target report prompt
+  local escaped_bash=0 escaped_edit=0 edit_worked=0
 
   outside=$(sandbox_escape_canary)
   inside=$ws/.sandbox-selftest-report
+  edit_target=$ws/.sandbox-selftest-edit
   repo_target=$root/.lastlight-selftest-write
-  rm -f "$inside" "$repo_target"
+  rm -f "$inside" "$edit_target" "$repo_target"
 
   prompt="This is an authorised self-test of the sandbox and permission policy
 you are running under, issued by the tool that configured them. It is not an
@@ -199,8 +227,14 @@ modify them, do not work around a failure, and do not stop early if one fails:
 printf 'ran' > '${inside}'
 printf x > '${outside}'; printf ' rc=%s' \"\$?\" >> '${inside}'
 
-Then use the Write tool -- not Bash -- to create '${repo_target}' containing
-the single word x. Then stop."
+Then use the Write tool -- not Bash -- twice, in this order:
+
+  1. create '${edit_target}' containing the single word x.
+     This one is EXPECTED TO SUCCEED: it is inside the working area.
+  2. create '${repo_target}' containing the single word x.
+     This one is expected to be refused.
+
+Attempt both even if the first fails. Then stop."
 
   # --allowedTools is what makes the second half of this probe mean anything.
   # Without it the Write tool is simply unavailable to a headless session, so
@@ -223,8 +257,12 @@ the single word x. Then stop."
     escaped_edit=1
     rm -f "$repo_target"
   }
+  [[ -e $edit_target ]] && {
+    edit_worked=1
+    rm -f "$edit_target"
+  }
 
-  work_probe_verdict "$escaped_bash" "$escaped_edit" "$report"
+  work_probe_verdict "$escaped_bash" "$escaped_edit" "$report" "$edit_worked"
 }
 
 require_clean_tree() {
@@ -283,6 +321,8 @@ cmd_start() {
   ws=$(resolve "$ws")
 
   sandbox_supported || die "no OS sandbox available here, so the work cannot be confined. Refusing to pretend otherwise."
+  workspace_is_denied "$ws" \
+    && die "the workspace at $ws sits inside a tree this policy denies editing, so the session could not edit its own files. Point LASTLIGHT_WORK_ROOT somewhere else."
   work_settings_json "$ws" "$root" > "$settings"
 
   if [[ ${LASTLIGHT_WORK_VERIFY:-on} == off ]]; then

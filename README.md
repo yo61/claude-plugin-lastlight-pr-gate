@@ -128,7 +128,7 @@ The review already runs on a disposable copy under an OS sandbox. The work that
 so a bad edit, a stray `rm`, or a command from a poisoned dependency landed on
 the only copy there was.
 
-`start` clones the branch into `~/.claude/work/<repo>/<branch>` (override with
+`start` clones the branch into `~/.lastlight/work/<repo>/<branch>` (override with
 `LASTLIGHT_WORK_ROOT`), writes a policy scoped to that clone, proves the policy
 holds, and opens a session there. A clone rather than a worktree: a worktree
 keeps its git dir *inside* the real repository, so confining writes to the
@@ -162,9 +162,16 @@ interactive approval. Everything else falls through to a prompt — a boundary a
 person can see. `$TMPDIR` is writable by spawned processes, because builds and
 test runners are unusable without it.
 
+Not under `~/.claude`: that tree is denied whole so a session cannot edit the
+hooks watching it, which would make every workspace a subtree of its own deny
+rule — and deny beats allow regardless of specificity. `start` refuses a
+workspace inside any denied tree rather than opening a session that cannot edit
+its own files.
+
 `start` refuses to open a session it could not prove was confined. The probe
-attempts both escapes and reports on itself, so a probe that never ran — a
-timeout, an auth failure — fails closed rather than passing for silence. Set
+attempts both escapes, checks that an edit inside the workspace *succeeds*, and
+reports on itself — so a probe that never ran fails closed rather than passing
+for silence, and a policy that forbids what it should allow fails too. Set
 `LASTLIGHT_WORK_VERIFY=off` to skip the proof and accept that risk deliberately.
 
 ### Landing does not make work pushable

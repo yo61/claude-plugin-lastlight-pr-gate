@@ -44,7 +44,8 @@ set +e
 
 # ── the containment verdict ──────────────────────────────────────────────
 echo "--- work_probe_verdict: inconclusive fails closed ---"
-verdict() { work_probe_verdict "$1" "$2" "$3" && echo pass || echo fail; }
+# escaped_bash, escaped_edit, report, edit_worked
+verdict() { work_probe_verdict "$1" "$2" "$3" "${4:-1}" && echo pass || echo fail; }
 
 # The only outcome that may open a session: nothing escaped by either route,
 # and the probe gave a complete account of having tried.
@@ -68,6 +69,14 @@ ok "report is not ours" "$(verdict 0 0 'unrelated text')" "fail"
 ok "status with no report around it" "$(verdict 0 0 '1')" "fail"
 # A write reporting success while leaving no file behind is unexplained.
 ok "escape reported as succeeding" "$(verdict 0 0 'ran rc=0')" "fail"
+
+# ...and the other direction, which nothing tested for three rounds: a policy
+# can be wrong by forbidding what it is supposed to ALLOW. When the work root
+# sat under a denied tree, every edit inside the workspace was refused, the
+# probe never tried one, and the session opened "verified" and broke on its
+# first edit.
+ok "editing inside the workspace was refused" "$(verdict 0 0 'ran rc=1' 0)" "fail"
+ok "everything held and editing works" "$(verdict 0 0 'ran rc=1' 1)" "pass"
 
 # ── the policy document ──────────────────────────────────────────────────
 echo "--- work_settings_json: both layers, spelled the way they are read ---"
@@ -226,6 +235,25 @@ ok "an unknown command is rejected" "$(grep -c 'unknown command' <<< "$out")" "1
 out=$(cd "$REPO" && "$WORK" land --bogus 2>&1)
 ok "an unknown option is rejected" "$(grep -c 'unknown option' <<< "$out")" "1"
 ok "--help prints the usage" "$("$WORK" --help | grep -c 'Do the WORK in a sandbox')" "1"
+
+echo "--- the workspace must not sit inside its own deny list ---"
+# ~/.claude is denied whole so a session cannot edit the hooks watching it. The
+# default work root used to live there, making every workspace a subtree of its
+# own deny rule -- and deny beats allow regardless of specificity, so the Edit
+# tool was refused throughout the session's own workspace.
+ok "a workspace under a denied tree is caught" \
+  "$(workspace_is_denied "$HOME/.claude/work/repo/branch/repo" && echo denied || echo ok)" "denied"
+ok "a workspace under the real default is not" \
+  "$(workspace_is_denied "$HOME/.lastlight/work/repo/branch/repo" && echo denied || echo ok)" "ok"
+ok "an exact denied path is caught, not just a child" \
+  "$(workspace_is_denied "$HOME/.ssh" && echo denied || echo ok)" "denied"
+# The regression itself: whatever the default becomes, it must be somewhere a
+# session can actually edit.
+# shellcheck disable=SC2016  # deliberate: these must expand in the CHILD shell,
+# which is the whole point -- it re-sources the script with the variable unset
+# so the SHIPPED default is what gets tested, not the one this suite exports.
+ok "the shipped default work root is editable" \
+  "$(env -u LASTLIGHT_WORK_ROOT bash -c 'source "$1"; workspace_is_denied "$(slot_for /a/b/repo main)/repo" && echo denied || echo ok' _ "$WORK")" "ok"
 
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]
