@@ -232,11 +232,22 @@ main() {
   printf 'Reviewing %s against %s\n  model: %s (independent session)\n' \
     "${sha:0:12}" "${base:0:12}" "$MODEL" >&2
 
-  if ! (cd "$review_root" && timeout "$TIMEOUT" claude -p "$(prompt "$review_root" "$base" "$sha")" \
+  # Say WHICH failure it was, and stop pointing at a file that cannot help.
+  # `timeout` kills the session with SIGTERM, so nothing is flushed and the log
+  # is empty by construction -- "failed or timed out; see the log" then sent the
+  # reader to an empty file, which is where this message used to end.
+  local rc=0
+  (cd "$review_root" && timeout "$TIMEOUT" claude -p "$(prompt "$review_root" "$base" "$sha")" \
     --allowed-tools "${tools[@]}" \
     "${extra_args[@]}" \
-    --model "$MODEL") > "$OUT_DIR/reviewer.log" 2>&1; then
-    die "the reviewer session failed or timed out; see $OUT_DIR/reviewer.log"
+    --model "$MODEL") > "$OUT_DIR/reviewer.log" 2>&1 || rc=$?
+  if [[ $rc -eq 124 ]]; then
+    die "the reviewer session was killed at the ${TIMEOUT}s timeout, so ${OUT_DIR}/reviewer.log is empty. Re-run it, or raise LASTLIGHT_REVIEW_TIMEOUT."
+  fi
+  if [[ $rc -ne 0 ]]; then
+    [[ -s "$OUT_DIR/reviewer.log" ]] \
+      || die "the reviewer session failed (exit ${rc}) without writing anything to ${OUT_DIR}/reviewer.log."
+    die "the reviewer session failed (exit ${rc}); see $OUT_DIR/reviewer.log"
   fi
 
   # A rule the CLI could not parse leaves the reviewer without a tool it needed,
