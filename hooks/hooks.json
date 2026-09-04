@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/lastlight-review-gate.sh\"",
+            "shell": "bash",
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__.*github.*__(create_pull_request|update_pull_request|push_files|create_or_update_file)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/lastlight-mcp-pr-gate.sh\"",
+            "shell": "bash",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,62 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-added-large-files
+      - id: check-case-conflict
+      - id: mixed-line-ending
+      - id: check-executables-have-shebangs
+      - id: check-shebang-scripts-are-executable
+
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint
+
+  - repo: https://github.com/woodruffw/zizmor-pre-commit
+    rev: v1.29.0
+    hooks:
+      - id: zizmor
+
+  # shellcheck and shfmt run from the system install rather than a pinned hook
+  # repo, so the flags here are byte-identical to the ones CI and the editor
+  # use. The four shfmt flags are the project standard: -i 2 two-space indent,
+  # -bn binary operators may start a line, -ci case arms indented under the
+  # case, -sr space after redirect operators. Note `-i2` is NOT valid — Go's
+  # flag parser reads it as a flag named `i2` and shfmt exits without
+  # formatting, silently.
+  - repo: local
+    hooks:
+      - id: shellcheck
+        name: shellcheck
+        entry: shellcheck
+        language: system
+        types: [shell]
+
+      - id: shfmt
+        name: shfmt
+        entry: shfmt -i 2 -bn -ci -sr -w
+        language: system
+        types: [shell]
+
+      # The gate is only as good as its test suite, and the allow-cases are
+      # the half that stops it crying wolf. Run them on every commit.
+      - id: gate-tests
+        name: gate test suite
+        entry: bash tests/lastlight-review-gate.test.sh
+        language: system
+        pass_filenames: false
+        files: '^(scripts|tests)/.*\.sh$'
+
+  - repo: https://github.com/alessandrojcm/commitlint-pre-commit-hook
+    rev: v9.26.0
+    hooks:
+      - id: commitlint
+        stages: [commit-msg]
+        additional_dependencies:
+          - "@commitlint/config-conventional@^21.2.2"

@@ -1,0 +1,31 @@
+version: 2
+updates:
+  - package-ecosystem: "pre-commit"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    # Route dependency bumps to the Dependencies changelog section.
+    # release-please picks a section by commit *type*, and the default
+    # `chore(deps)` is type `chore`, which the preset hides. No
+    # `include: scope` -- it would produce `deps(deps):`.
+    commit-message:
+      prefix: "deps"
+    groups:
+      hooks:
+        patterns: ["*"]
+
+  # GitHub Actions. Pins are SHAs with version comments; Dependabot
+  # rewrites both. Majors stay outside the group so they arrive singly.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "deps"
+    groups:
+      actions-minor-patch:
+        update-types: ["minor", "patch"]

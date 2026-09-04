@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  commitlint:
+    name: Conventional Commits
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # Fork of wagoid/commitlint-github-action. Upstream is unmaintained: no
+      # commit to master since 2025-01-14, and it pins @commitlint/ensure ^19,
+      # two majors behind. This fork runs commitlint v21 on node 24, and pins its
+      # runtime image by digest so the SHA pin here cannot be worked around.
+      - uses: yo61/commitlint-github-action@501ff7bb31eb7133c871318c877d0e43cd1ff500  # v6.3.0 (digest-pinned)
+        with:
+          configFile: commitlint.config.mjs
+
+  validate-plugin-json:
+    name: plugin.json validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate plugin.json shape
+        run: |
+          set -euo pipefail
+          jq -e '
+            (.name | type) == "string" and
+            (.version | type) == "string" and
+            (.description | type) == "string" and
+            (.author == null or (.author | type) == "object") and
+            (.author == null or .author.name == null or (.author.name | type) == "string") and
+            (.author == null or .author.email == null or (.author.email | type) == "string") and
+            (.license == null or (.license | type) == "string") and
+            (.homepage == null or (.homepage | type) == "string") and
+            (.repository == null or (.repository | type) == "string")
+          ' .claude-plugin/plugin.json
+      - name: Validate hooks.json shape
+        run: |
+          set -euo pipefail
+          # A malformed hooks.json disables the plugin silently, which is the
+          # worst failure mode for a guardrail: it looks installed and enforces
+          # nothing. Assert the shape rather than only that it parses.
+          jq -e '
+            (.hooks | type) == "object" and
+            (.hooks.PreToolUse | type) == "array" and
+            ([.hooks.PreToolUse[] | .matcher | type] | all(. == "string")) and
+            ([.hooks.PreToolUse[].hooks[] | .command | type] | all(. == "string")) and
+            ([.hooks.PreToolUse[].hooks[] | .command] | all(startswith("\"${CLAUDE_PLUGIN_ROOT}")))
+          ' hooks/hooks.json
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      # shellcheck is preinstalled on ubuntu-latest. shfmt is not, and installing
+      # it through Go (also preinstalled) at a pinned version avoids taking on
+      # another action dependency to SHA-pin and keep updated.
+      - name: Install shfmt
+        run: |
+          set -euo pipefail
+          go install mvdan.cc/sh/v3/cmd/shfmt@v3.14.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: shellcheck
+        run: shellcheck scripts/*.sh tests/*.sh
+
+      # -i 2 -bn -ci -sr is the project standard, matching the local prek hook
+      # and the editor, so a file formatted on save passes here unchanged.
+      - name: shfmt
+        run: shfmt -i 2 -bn -ci -sr -d scripts/*.sh tests/*.sh
+
+      # The suite covers blocked AND allowed forms. The allowed half is the one
+      # that matters: a guard that cries wolf gets switched off.
+      - name: gate test suite
+        run: GATE="$PWD/scripts/lastlight-review-gate.sh" bash tests/lastlight-review-gate.test.sh

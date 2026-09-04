@@ -1,0 +1,55 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # Mint a semantic-release-pusher App token. Used both by release-please
+      # (so its PRs are App-authored and trigger workflow events, ready for any
+      # future branch protection) AND by the marketplace-dispatch step below.
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        id: app-token
+        with:
+          client-id: ${{ secrets.SEMANTIC_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SEMANTIC_RELEASE_APP_PRIVATE_KEY }}
+          # Scope the token to exactly the two repos this workflow touches:
+          # this repo (for release-please) and claude-skills (for the dispatch).
+          owner: ${{ github.repository_owner }}
+          repositories: |
+            claude-plugin-lastlight-pr-gate
+            claude-skills
+          # Explicitly request only the permissions needed; drop everything else
+          # from the blanket installation grant.
+          permission-contents: write
+          permission-pull-requests: write
+
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7  # v5.0.0
+        id: rp
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          token: ${{ steps.app-token.outputs.token }}
+
+      # When release-please cuts a new release (PR merged → tag + GH Release),
+      # tell the marketplace repo so it can bump its `source.ref` pin.
+      - name: Dispatch to marketplace on release
+        if: steps.rp.outputs.release_created == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PLUGIN: lastlight-pr-gate
+          TAG: ${{ steps.rp.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          gh api repos/yo61/claude-skills/dispatches \
+            --method POST \
+            -f event_type=plugin-released \
+            -f client_payload[plugin]="$PLUGIN" \
+            -f client_payload[tag]="$TAG"
