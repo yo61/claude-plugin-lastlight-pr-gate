@@ -180,6 +180,23 @@ sandbox_supported() {
 # So attempt an actual escape under the real policy and require it to fail. A
 # canary written outside the workspace means the sandbox is not in force,
 # whatever the settings file said.
+# A path the probe must NOT be able to write: outside every writable area, with
+# a parent directory that EXISTS.
+#
+# That second half is the whole point, and it was missing. The canary was
+# `$(mktemp -u)/sandbox-escape-canary` -- but `mktemp -u` prints a name without
+# creating anything, so the parent never existed and the write failed with
+# ENOENT whether or not a sandbox was engaged. Every run reported containment
+# verified. Confirmed by writing to such a path with no policy in force at all:
+# exit status 1, indistinguishable from a sandbox refusing it.
+#
+# $HOME rather than a temp directory: the work sandbox deliberately grants
+# spawned processes write access to $TMPDIR, so a canary there would be written
+# successfully by a CORRECTLY confined session and read as an escape.
+sandbox_escape_canary() {
+  printf '%s/.lastlight-containment-probe.%s' "$HOME" "$$"
+}
+
 # The verdict on a probe run, split out from the probe so it can be tested
 # without spending a model call. The bug this replaced was in the DECISION, not
 # in the probe -- absence of an escape canary was read as containment when it
@@ -212,7 +229,7 @@ sandbox_probe_verdict() {
 
 sandbox_verify() {
   local settings=$1 workspace=$2 outside inside report prompt
-  outside=$(mktemp -u)/outside-workspace-write
+  outside=$(sandbox_escape_canary)
   inside=$workspace/.sandbox-selftest-report
   rm -f "$inside"
 

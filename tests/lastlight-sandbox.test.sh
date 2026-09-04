@@ -156,5 +156,19 @@ ok "untracked filename containing spaces" \
 ok "untracked symlink stays a symlink" \
   "$([[ -L "$WWS2/dangling-link" ]] && echo yes || echo no)" "yes"
 
+echo "--- sandbox_escape_canary: a probe target that measures something ---"
+CANARY=$(sandbox_escape_canary)
+# `$(mktemp -u)/name` prints a name without creating the parent, so the write
+# failed with ENOENT whether or not a sandbox was engaged -- and a probe that
+# always fails is a probe that always reports containment.
+ok "the canary's parent directory exists" \
+  "$([[ -d $(dirname "$CANARY") ]] && echo yes || echo no)" "yes"
+ok "the canary itself does not exist yet" \
+  "$([[ -e $CANARY ]] && echo yes || echo no)" "no"
+# A canary under a directory the policy grants would be written by a correctly
+# confined session and misread as an escape.
+ok "the canary is not under the temp dir the work policy allows" \
+  "$(case $CANARY in "${TMPDIR:-/tmp}"*) echo under ;; *) echo outside ;; esac)" "outside"
+
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]

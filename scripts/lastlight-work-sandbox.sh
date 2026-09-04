@@ -183,7 +183,7 @@ work_verify() {
   local settings=$1 ws=$2 root=$3
   local outside inside repo_target report escaped_bash=0 escaped_edit=0 prompt
 
-  outside=$(mktemp -u)/outside-workspace-write
+  outside=$(sandbox_escape_canary)
   inside=$ws/.sandbox-selftest-report
   repo_target=$root/.lastlight-selftest-write
   rm -f "$inside" "$repo_target"
