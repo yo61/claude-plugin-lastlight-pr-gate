@@ -19,10 +19,27 @@
 #
 # DELIBERATE DEVIATION FROM THE SKILL
 #   The skill permits *probes* -- installing dependencies and executing code to
-#   settle a question. This runner is READ-ONLY (no dependency installs, no
-#   arbitrary execution), because it runs unattended from a push. Set
-#   LASTLIGHT_REVIEW_TOOLS to widen it if you want probe fidelity, and know that
-#   you are granting a headless session write and execute access to the repo.
+#   settle a question. This runner does not, because it runs unattended from a
+#   push. Set LASTLIGHT_REVIEW_TOOLS to widen it if you want probe fidelity, and
+#   know that you are granting a headless session execute access to the repo.
+#
+# THREAT MODEL -- the reviewed diff is UNTRUSTED INPUT
+#   The prompt tells this session the code is not its own and not to be trusted.
+#   That makes the diff an injection surface: a payload in a reviewed file or
+#   comment can try to steer an unattended session with real tool access.
+#
+#   WRITES are therefore scoped to the single file the skill's contract needs,
+#   via an `Edit(<findings.json>)` rule and NO bare `Write` -- a bare `Write`
+#   entry is itself an unscoped allow and silently defeats the path rule
+#   (verified). Without this, an injected instruction could overwrite
+#   `lastlight-review-gate.sh` itself and silently disable the push gate this
+#   plugin exists to enforce.
+#
+#   READS are NOT scoped: the reviewer must read the repo and the staged skill
+#   assets, and file-permission rules only match `Edit(...)`. So a successful
+#   injection could still exfiltrate anything the invoking user can read, given
+#   an egress path. Treat that as the residual risk; do not run this over a
+#   diff from a source you would not run code from.
 #
 # Usage:
 #   lastlight-review-run.sh [--model <m>] [base-ref]   # base: merge-base with origin/HEAD
@@ -43,8 +60,11 @@ readonly TIMEOUT="${LASTLIGHT_REVIEW_TIMEOUT:-900}"
 # An ARRAY, not a string: these contain spaces and parentheses, so a word-split
 # string turns `Bash(git diff:*)` into two malformed rules that the CLI ignores
 # with a warning -- leaving the reviewer unable to run git at all.
+# NOTE the absence of a bare `Write`: that would be an unscoped allow and would
+# silently defeat the `Edit(<findings.json>)` rule appended in main(). Writes
+# must stay confined to the one file the contract requires.
 readonly DEFAULT_TOOLS=(
-  Read Grep Glob Write
+  Read Grep Glob
   'Bash(git diff:*)' 'Bash(git log:*)' 'Bash(git show:*)'
   'Bash(git status:*)' 'Bash(rg:*)' 'Bash(fd:*)'
 )
@@ -112,6 +132,15 @@ main() {
   if [[ -n ${LASTLIGHT_REVIEW_TOOLS:-} ]]; then
     IFS=',' read -r -a tools <<< "$LASTLIGHT_REVIEW_TOOLS"
   fi
+  # The ONE write the contract needs, scoped to exactly that path. Appended
+  # after any override so widening the tool list cannot accidentally drop the
+  # reviewer's ability to record its own result.
+  #
+  # RELATIVE, and main() has already cd'd to $root. A bare absolute path does
+  # NOT match (verified: the reviewer was then unable to write its own findings,
+  # which would have failed every run closed); the absolute form needs a `//`
+  # prefix. The relative form sidesteps that entirely.
+  tools+=("Edit(${OUT_DIR}/findings.json)")
 
   printf 'Reviewing %s against %s\n  model: %s (independent session)\n' \
     "${sha:0:12}" "${base:0:12}" "$MODEL" >&2

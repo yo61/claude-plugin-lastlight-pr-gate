@@ -40,11 +40,32 @@ Then pull the review assets once:
 
 ```bash
 scripts/lastlight-review-sync.sh --check   # assets present and unmodified?
-# follow ~/.claude/lastlight-review/skills/pr-review/SKILL.md against the
-# three-dot diff; write .lastlight/pr-review/findings.json in its schema
-scripts/lastlight-review-record.sh          # records the pass at HEAD
+scripts/lastlight-review-run.sh            # independent review of HEAD's diff
+scripts/lastlight-review-record.sh         # records the pass at HEAD
 git push
 ```
+
+`lastlight-review-run.sh` is **required**, not a convenience. It runs the review
+in a fresh `claude -p` session that did not write the code, and writes
+`attestation.json` binding the result to the head SHA *and* a hash of the exact
+diff read. The recorder refuses a marker without a matching attestation, so a
+hand-written `findings.json` is not accepted — an agent cannot approve its own
+work in one line.
+
+That is not tamper-proof: whoever can write `findings.json` can write the
+attestation beside it. It makes the honest path the easy path, and stops a
+stale review silently vouching for new code.
+
+**Model.** Defaults to `sonnet`, matching Last Light's own `models.default`, so
+the local pass runs at the same tier as the server's rather than inheriting
+whatever the invoking session used. Override with `--model <m>` or
+`LASTLIGHT_REVIEW_MODEL`; the resolved value is recorded in the attestation.
+
+**The reviewed diff is untrusted input.** Writes are scoped to the single
+`findings.json` path, because an injected instruction in a reviewed file could
+otherwise overwrite the gate script itself and silently disable it. Reads are
+not scoped — the reviewer must read the repo — so treat exfiltration as the
+residual risk and do not review a diff you would not run code from.
 
 **Pass bar:** `findings: []`, or every finding dismissed in
 `.lastlight/pr-review/dismissed.json` as `{"<title>": "reason"}`, each reason at

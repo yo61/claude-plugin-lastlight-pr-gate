@@ -59,6 +59,13 @@ repos:
         pass_filenames: false
         files: '^(scripts|tests)/.*\.sh$'
 
+      - id: recorder-tests
+        name: recorder test suite
+        entry: env RECORD=./scripts/lastlight-review-record.sh bash tests/lastlight-review-record.test.sh
+        language: system
+        pass_filenames: false
+        files: '^(scripts|tests)/.*\.sh$'
+
   - repo: https://github.com/alessandrojcm/commitlint-pre-commit-hook
     rev: v9.26.0
     hooks:

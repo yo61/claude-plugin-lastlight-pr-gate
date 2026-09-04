@@ -229,13 +229,16 @@ Anything that lands on a remote gets reviewed by Last Light -- on the pr.opened
 webhook, or by the 30-minute check-prs-awaiting-review sweep. Reviewing locally
 first is what stops that becoming a round trip.
 
-Run the SAME review Last Light would run -- it is the identical skill:
+Run the SAME review Last Light would run -- it is the identical skill, executed
+by a session that did not write the code:
 
 1. Check the assets are staged and unmodified:
      ${SELF_DIR}/lastlight-review-sync.sh --check
-2. Follow ~/.claude/lastlight-review/skills/pr-review/SKILL.md against the
-   three-dot diff for this branch, writing .lastlight/pr-review/findings.json
-   in that skill's schema.
+2. Run the review:
+     ${SELF_DIR}/lastlight-review-run.sh
+   This is REQUIRED, not a convenience. It writes the attestation binding the
+   review to this SHA and diff; the recorder refuses without one, so a
+   hand-written findings.json will not be accepted.
 3. Fix what it finds, or dismiss each finding with a written reason in
    .lastlight/pr-review/dismissed.json.
 4. Record the pass:

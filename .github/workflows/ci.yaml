@@ -91,3 +91,8 @@ jobs:
       # that matters: a guard that cries wolf gets switched off.
       - name: gate test suite
         run: GATE="$PWD/scripts/lastlight-review-gate.sh" bash tests/lastlight-review-gate.test.sh
+
+      # The attestation check is the security property this plugin is named for,
+      # so it gets its own coverage rather than riding on the gate's.
+      - name: recorder test suite
+        run: RECORD="$PWD/scripts/lastlight-review-record.sh" bash tests/lastlight-review-record.test.sh
