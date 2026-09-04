@@ -84,20 +84,32 @@ main() {
   # the model that produced it.
   # Review uncommitted work instead of a committed diff. Advisory only: see
   # where the attestation is written for why it cannot satisfy the push gate.
+  # A LOOP, not two positional tests. Checking each flag only in position one
+  # meant `--model opus --working-tree` left the second flag sitting where the
+  # base-ref argument is read, so the mode silently did not engage and the run
+  # died complaining about a merge base instead. Order must not matter, and an
+  # unknown flag must say so rather than be read as a ref.
   WORKING_TREE=0
-  if [[ ${1:-} == --working-tree ]]; then
-    WORKING_TREE=1
-    shift
-  fi
-  readonly WORKING_TREE
-
   MODEL=${LASTLIGHT_REVIEW_MODEL:-$DEFAULT_MODEL}
-  if [[ ${1:-} == --model ]]; then
-    [[ -n ${2:-} ]] || die "--model needs a value"
-    MODEL=$2
-    shift 2
-  fi
-  readonly MODEL
+  while [[ ${1:-} == --* ]]; do
+    case $1 in
+      --working-tree)
+        WORKING_TREE=1
+        shift
+        ;;
+      --model)
+        [[ -n ${2:-} ]] || die "--model needs a value"
+        MODEL=$2
+        shift 2
+        ;;
+      --help | -h)
+        sed -n '2,45p' "$0"
+        exit 0
+        ;;
+      *) die "unknown option: $1" ;;
+    esac
+  done
+  readonly WORKING_TREE MODEL
 
   local root sha base
   root=$(git rev-parse --show-toplevel 2> /dev/null) || die "not inside a git repository"
