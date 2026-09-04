@@ -41,6 +41,52 @@
 #   an egress path. Treat that as the residual risk; do not run this over a
 #   diff from a source you would not run code from.
 #
+# THE PROPER FIX, DESIGNED AND VERIFIED BUT NOT YET WIRED IN
+#   Read-scoping and the no-probes restriction are both workarounds for running
+#   an untrusted diff with the invoking user's full privileges. Isolating the
+#   session removes the need for either -- and Claude Code already ships the
+#   pieces, so this needs no container.
+#
+#   Two parts:
+#     1. A DISPOSABLE COPY. Clone the repo at HEAD into a temp dir
+#        (`git clone --no-hardlinks`) and review there, so nothing the session
+#        writes can reach the real working tree or its .git.
+#
+#        A clone carries only COMMITTED state -- verified: local
+#        committed-but-unpushed commits come across, uncommitted modifications
+#        and untracked files do not. That is not a gap here, because the code
+#        under review is committed by construction: the recorder refuses a
+#        marker while the tree is dirty outside .lastlight/, and the marker
+#        vouches for a SHA, which cannot describe a working tree.
+#
+#        It is in fact a fidelity GAIN. Last Light reviews a checkout of the PR
+#        head -- committed code only -- so a clone matches what the server sees,
+#        whereas reviewing in place lets the reviewer read untracked and
+#        gitignored files the server never will.
+#
+#        The genuine consequence: this can never review work BEFORE it is
+#        committed. The order is commit -> review -> record -> push, and acting
+#        on a finding means a new commit and a fresh review. That is inherent to
+#        keying on a SHA, not something the clone introduces.
+#     2. THE BUILT-IN SANDBOX, passed to `claude -p --settings`:
+#          sandbox.enabled: true
+#          sandbox.filesystem.allowWrite: [<the temp clone>]
+#          sandbox.filesystem.denyRead:  [~/.ssh, ~/.aws, ~/.claude, .envrc, ...]
+#          sandbox.network.allowedDomains: [api.anthropic.com, ...]
+#          sandbox.credentials.envVars:  deny/mask the tokens
+#
+#   All four controls were verified on macOS (Seatbelt, sandbox-exec) on
+#   2026-09-04: a write inside allowWrite succeeded; a read of a denied path was
+#   refused; a write outside allowWrite was refused; and egress to a domain
+#   outside allowedDomains was refused. The last is the one that actually closes
+#   exfiltration, which read-scoping alone never could.
+#
+#   With that in place the read restriction stops mattering and PROBES become
+#   safe to re-enable -- which is the point, because a probe is what caught a
+#   real safety bug that static reading missed (an `rm -rf` exemption that let
+#   a disposable argument exempt a protected path beside it). The affordance
+#   this runner currently withholds is the one that found the bug.
+#
 # Usage:
 #   lastlight-review-run.sh [--model <m>] [base-ref]   # base: merge-base with origin/HEAD
 #
