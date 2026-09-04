@@ -102,10 +102,20 @@ ok "every rule uses the doubled slash" \
 
 # Deny beats allow and beats an interactive approval, so these stay unreachable
 # even if someone clicks yes on a prompt.
-for secret in .ssh .aws .gnupg; do
-  ok "$secret is denied" \
-    "$(jq -r --arg s "$secret" '[.permissions.deny[] | select(contains($s))] | length' <<< "$POLICY")" "1"
-done
+# EVERY path the read policy protects, not a hand-picked few. These lists were
+# maintained separately once and drifted -- the read policy named nine stores
+# and the edit policy five, losing .netrc, .npmrc, .pypirc and
+# .docker/config.json, all files a session could rewrite to point a package
+# manager wherever it liked. Deriving the expectation from the same source is
+# what stops the test drifting with it.
+while IFS= read -r secret; do
+  ok "$secret cannot be edited" \
+    "$(jq -r --arg s "$secret" '[.permissions.deny[] | select(. == "Edit(/" + $s + ")" or . == "Edit(/" + $s + "/**)")] | length' <<< "$POLICY")" "2"
+done < <(edit_denied_paths)
+
+# A session that can edit ~/.claude/hooks can switch off the guard watching it.
+ok "the agent's own configuration is denied" \
+  "$(jq -r --arg h "$HOME" '[.permissions.deny[] | select(. == "Edit(/" + $h + "/.claude/**)")] | length' <<< "$POLICY")" "1"
 
 echo "--- work_allowed_domains ---"
 ok "the model endpoint is reachable" \

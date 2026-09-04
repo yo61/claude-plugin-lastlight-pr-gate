@@ -81,6 +81,27 @@ slot_for() {
   printf '%s/%s/%s' "$WORK_ROOT" "$(basename "$root")" "$branch"
 }
 
+# The paths a file-editing tool must not touch, whatever else is allowed.
+#
+# DERIVED from sandbox_denied_reads() rather than restated. The two lists were
+# maintained separately and had already drifted: the read policy named nine
+# credential stores, the edit policy five. The four it lost -- .netrc, .npmrc,
+# .pypirc, .docker/config.json -- are all files a session could REWRITE to
+# point a package manager at a host of its choosing. Reading is the lesser
+# risk; the list that stops writing was the shorter one.
+#
+# ~/.claude is added whole rather than just its credentials file: a session
+# that can edit ~/.claude/hooks or ~/.claude/settings.json can switch off the
+# guard that is watching it.
+#
+# Each path yields two rules, for the file form and the directory form. Which
+# one a path needs is not knowable here -- some do not exist yet -- and a rule
+# that matches nothing costs nothing.
+edit_denied_paths() {
+  sandbox_denied_reads
+  printf '%s\n' "$HOME/.claude"
+}
+
 # The policy a work session runs under: the OS sandbox for spawned processes,
 # plus permission rules for the tools the OS sandbox does not reach.
 #
@@ -103,6 +124,7 @@ work_settings_json() {
     --arg tmp "$tmp" \
     --arg home "$HOME" \
     --argjson deny "$(sandbox_denied_reads | jq -R . | jq -s .)" \
+    --argjson secrets "$(edit_denied_paths | jq -R . | jq -s 'map("Edit(/" + . + ")", "Edit(/" + . + "/**)")')" \
     --argjson net "$(work_allowed_domains | jq -R . | jq -s .)" \
     '{
       sandbox: {
@@ -114,14 +136,7 @@ work_settings_json() {
       },
       permissions: {
         allow: ["Edit(/\($ws)/**)"],
-        deny: [
-          "Edit(/\($root)/**)",
-          "Edit(/\($home)/.ssh/**)",
-          "Edit(/\($home)/.aws/**)",
-          "Edit(/\($home)/.gnupg/**)",
-          "Edit(/\($home)/.config/gh/**)",
-          "Edit(/\($home)/.claude/**)"
-        ]
+        deny: (["Edit(/\($root)/**)"] + $secrets)
       }
     }'
 }
