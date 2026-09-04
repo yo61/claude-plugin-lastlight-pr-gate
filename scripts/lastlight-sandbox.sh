@@ -131,12 +131,26 @@ sandbox_make_working_workspace() {
   fi
   rm -f "$patch"
 
-  # -z/--from0: filenames may contain spaces or newlines, and a review of a
+  # Untracked files are the whole point of this mode, so a failure to copy them
+  # is fatal rather than quiet. This was `rsync`, guarded by a `command -v` that
+  # simply skipped the copy when it was missing: on a host with `bwrap` but no
+  # rsync -- which sandbox_supported() happily accepts -- the reviewer received
+  # a workspace containing NONE of the new files it was asked to look at, and
+  # said so in no way at all.
+  #
+  # `cp` is in every base system, and the untracked set excludes ignored files,
+  # so it is small. `-P` keeps a symlink a symlink instead of copying whatever
+  # it points at, which may be outside the repository entirely.
+  #
+  # -z / read -d '': filenames may contain spaces or newlines, and a review of a
   # tree with such a name must not silently skip it.
-  if command -v rsync > /dev/null 2>&1; then
-    (cd "$root" && git ls-files --others --exclude-standard -z \
-      | rsync -a --files-from=- --from0 . "$ws/") 2> /dev/null || true
-  fi
+  local f
+  while IFS= read -r -d '' f; do
+    mkdir -p "$ws/$(dirname "$f")" \
+      || die "could not create a directory for untracked '$f' in the isolated workspace"
+    cp -RP -- "$root/$f" "$ws/$f" \
+      || die "could not copy untracked '$f' into the isolated workspace"
+  done < <(git -C "$root" ls-files --others --exclude-standard -z)
   printf '%s' "$ws"
 }
 

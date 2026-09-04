@@ -121,5 +121,20 @@ ok "still an independent .git" "$([[ -d $WWS/.git ]] && echo yes || echo no)" "y
 PLAIN=$(cd "$REPO" && sandbox_make_workspace "$REPO" "$(git -C "$REPO" rev-parse HEAD)")
 ok "a plain clone lacks it" "$(rg -c modified "$PLAIN/f.txt" 2> /dev/null || echo 0)" "0"
 
+echo "--- untracked files are copied faithfully, not approximately ---"
+mkdir -p "$REPO/nested/deep"
+echo nested > "$REPO/nested/deep/file.txt"
+echo spaced > "$REPO/a file with spaces.txt"
+ln -sfn /etc/hosts "$REPO/dangling-link"
+WWS2=$(sandbox_make_working_workspace "$REPO")
+ok "untracked file in a new subdirectory" \
+  "$([[ -f "$WWS2/nested/deep/file.txt" ]] && echo yes || echo no)" "yes"
+ok "untracked filename containing spaces" \
+  "$([[ -f "$WWS2/a file with spaces.txt" ]] && echo yes || echo no)" "yes"
+# A symlink copied as its target drags a file from outside the repo INTO the
+# workspace, which is the opposite of isolating the review.
+ok "untracked symlink stays a symlink" \
+  "$([[ -L "$WWS2/dangling-link" ]] && echo yes || echo no)" "yes"
+
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]
