@@ -115,6 +115,72 @@ The marker is **SHA-keyed**, so fixing a finding produces a new SHA that needs
 its own review. Iterating locally until clean is structural, not a matter of
 discipline.
 
+## Sandboxing the work, not just the review
+
+```bash
+scripts/lastlight-work-sandbox.sh start -b feat/thing   # clone, confine, open a session
+scripts/lastlight-work-sandbox.sh land  -b feat/thing   # fast-forward the work back
+scripts/lastlight-work-sandbox.sh list                  # what is in flight
+```
+
+The review already runs on a disposable copy under an OS sandbox. The work that
+*produces* the code did not: it ran in the real repository with your privileges,
+so a bad edit, a stray `rm`, or a command from a poisoned dependency landed on
+the only copy there was.
+
+`start` clones the branch into `~/.claude/work/<repo>/<branch>` (override with
+`LASTLIGHT_WORK_ROOT`), writes a policy scoped to that clone, proves the policy
+holds, and opens a session there. A clone rather than a worktree: a worktree
+keeps its git dir *inside* the real repository, so confining writes to the
+workspace would mean granting write access to the real object store — the one
+thing worth protecting. `--no-hardlinks` shares nothing.
+
+### Two layers, because neither covers the other
+
+| Layer | Confines | Does **not** confine |
+|---|---|---|
+| `sandbox.filesystem` | spawned processes — the `Bash` tool | `Write`, `Edit`, `NotebookEdit` |
+| `permissions` rules | every file-editing tool | processes Bash spawns |
+
+The second is not garnish. Verified directly: with only the filesystem sandbox
+in force, the `Write` tool created a file outside the workspace and reported
+success. A *review* session never noticed, because it is given `Read`/`Grep`/
+`Glob`/`Bash` and no way to write — but a work session lives on `Write` and
+`Edit`, so for it the filesystem sandbox alone is not a boundary at all.
+
+Two spellings matter, and both fail **silently** when wrong:
+
+- `Edit(...)` rules cover every file-editing tool. `Write(...)` rules are not
+  consulted by file permission checks at all.
+- An absolute path needs a **doubled** slash — `Edit(//tmp/x/**)`.
+  `Edit(/tmp/x/**)` matches nothing, denies nothing, and looks like a rule that
+  works.
+
+Editing is allowed in the workspace and nowhere else; the real repository and
+the obvious secret stores are *denied*, which beats allow and beats an
+interactive approval. Everything else falls through to a prompt — a boundary a
+person can see. `$TMPDIR` is writable by spawned processes, because builds and
+test runners are unusable without it.
+
+`start` refuses to open a session it could not prove was confined. The probe
+attempts both escapes and reports on itself, so a probe that never ran — a
+timeout, an auth failure — fails closed rather than passing for silence. Set
+`LASTLIGHT_WORK_VERIFY=off` to skip the proof and accept that risk deliberately.
+
+### Landing does not make work pushable
+
+`land` fast-forwards the branch into the real repository. Fast-forward only:
+divergence is for a person to look at, not for a script to resolve by
+overwriting one side.
+
+It deliberately does **not** check for a review marker. A marker proving a
+review is worth something only if the reviewed code could not have written it —
+and everything in the workspace is under the session's control, including its
+own git dir. So the proof lives where the sandbox cannot reach: markers are
+written only by a review run in the real repository, and only a marker opens the
+push gate. Landing moves code onto a branch; the gate still decides whether it
+can leave.
+
 ## What is and is not gated
 
 Gated until a marker exists for the SHA being pushed:
@@ -186,11 +252,24 @@ the file with the Write tool.
 ## Tests
 
 ```bash
-bash tests/lastlight-review-gate.test.sh   # 38 cases, both directions
+for t in tests/*.test.sh; do bash "$t"; done
 ```
+
+| suite | cases | covers |
+|---|---|---|
+| `lastlight-review-gate.test.sh` | 44 | what is gated, what is allowed through |
+| `lastlight-review-record.test.sh` | 10 | the pass bar and the attestation binding |
+| `lastlight-sandbox.test.sh` | 41 | review isolation and the containment verdict |
+| `lastlight-work-sandbox.test.sh` | 46 | work isolation, policy spelling, landing |
 
 The test repo deliberately has **no remote**, which proves the gate never
 depended on the network.
+
+The containment verdicts are tested as pure functions, without a model call —
+deliberately, since a check that costs money per assertion is a check that stops
+being run. The live end-to-end proof is run by hand when the policy changes, in
+both directions: the full policy must verify, and a policy with a layer removed
+must *not*.
 
 Lint: `shellcheck scripts/*.sh tests/*.sh` and
 `shfmt -i 2 -bn -ci -sr -d scripts/*.sh tests/*.sh`.
