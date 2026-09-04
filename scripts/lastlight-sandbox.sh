@@ -99,6 +99,47 @@ sandbox_make_workspace() {
   printf '%s' "$ws"
 }
 
+# A disposable copy of the WORKING STATE, for reviewing work before it is
+# committed. Prints the workspace path.
+#
+# A clone alone will not do: it carries committed history only, so uncommitted
+# modifications and untracked files -- the entire subject of a pre-commit
+# review -- are absent from it. The copy is therefore assembled in three steps:
+#
+#   1. clone at HEAD (an independent .git, per the hardlink note above)
+#   2. apply the uncommitted diff to tracked files
+#   3. copy untracked files, EXCLUDING ignored ones
+#
+# Step 3's exclusion is a feature. It keeps node_modules and .venv out of the
+# copy, which keeps it fast -- and means a probe that needs dependencies
+# installs them inside the sandbox rather than inheriting whatever is already
+# on disk. A poisoned local dependency tree cannot execute during a review it
+# was never copied into.
+sandbox_make_working_workspace() {
+  local root=$1 ws patch
+  ws=$(mktemp -d)/review
+  git clone --quiet --no-hardlinks --no-checkout "$root" "$ws" 2> /dev/null \
+    || die "could not clone the repository into an isolated workspace"
+  git -C "$ws" checkout --quiet --detach HEAD 2> /dev/null \
+    || die "could not check out HEAD in the isolated workspace"
+
+  patch=$(mktemp)
+  git -C "$root" diff HEAD > "$patch"
+  if [[ -s $patch ]]; then
+    git -C "$ws" apply "$patch" 2> /dev/null \
+      || die "could not apply the uncommitted changes to the isolated workspace"
+  fi
+  rm -f "$patch"
+
+  # -z/--from0: filenames may contain spaces or newlines, and a review of a
+  # tree with such a name must not silently skip it.
+  if command -v rsync > /dev/null 2>&1; then
+    (cd "$root" && git ls-files --others --exclude-standard -z \
+      | rsync -a --files-from=- --from0 . "$ws/") 2> /dev/null || true
+  fi
+  printf '%s' "$ws"
+}
+
 # Whether an OS sandbox is actually available here. Checked BEFORE building a
 # workspace so an unsupported platform degrades to a stated read-only review
 # rather than failing mid-run.

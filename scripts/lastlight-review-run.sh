@@ -82,6 +82,15 @@ main() {
   # Model resolution, most specific first: --model flag, env, then the pinned
   # default. Recorded in the attestation so a review can always be traced to
   # the model that produced it.
+  # Review uncommitted work instead of a committed diff. Advisory only: see
+  # where the attestation is written for why it cannot satisfy the push gate.
+  WORKING_TREE=0
+  if [[ ${1:-} == --working-tree ]]; then
+    WORKING_TREE=1
+    shift
+  fi
+  readonly WORKING_TREE
+
   MODEL=${LASTLIGHT_REVIEW_MODEL:-$DEFAULT_MODEL}
   if [[ ${1:-} == --model ]]; then
     [[ -n ${2:-} ]] || die "--model needs a value"
@@ -114,14 +123,25 @@ main() {
   # `base...HEAD` (committed) while the reviewer reads files from the live
   # working tree (uncommitted). Checking here makes "reviews run against
   # committed code" true rather than true-by-convention.
-  if [[ -n $(git status --porcelain -- ':(exclude).lastlight/') ]]; then
-    die "the working tree has uncommitted changes outside .lastlight/. The diff under review is base...HEAD, but the reviewer reads the live tree, so the two would disagree. Commit or stash first."
+  if [[ $WORKING_TREE -eq 0 && -n $(git status --porcelain -- ':(exclude).lastlight/') ]]; then
+    die "the working tree has uncommitted changes outside .lastlight/. The diff under review is base...HEAD, but the reviewer reads the live tree, so the two would disagree. Commit or stash first, or pass --working-tree to review the uncommitted state itself."
   fi
 
   mkdir -p "$OUT_DIR"
 
   # Three-dot: what this branch adds, not what main did meanwhile (SKILL.md §3).
-  git diff "$base"...HEAD > "$OUT_DIR/diff.patch"
+  # In working-tree mode the subject is instead everything not yet committed,
+  # tracked and untracked alike.
+  if [[ $WORKING_TREE -eq 1 ]]; then
+    base=HEAD
+    {
+      git diff HEAD
+      git ls-files --others --exclude-standard -z \
+        | xargs -0 -I{} git diff --no-index -- /dev/null {} 2> /dev/null || true
+    } > "$OUT_DIR/diff.patch"
+  else
+    git diff "$base"...HEAD > "$OUT_DIR/diff.patch"
+  fi
   if [[ ! -s "$OUT_DIR/diff.patch" ]]; then
     die "empty diff against ${base:0:12} -- nothing to review"
   fi
@@ -140,7 +160,11 @@ main() {
   local workspace="" settings_file="" review_root=$root
   local -a extra_args=()
   if [[ ${LASTLIGHT_REVIEW_SANDBOX:-on} != off ]] && sandbox_supported; then
-    workspace=$(sandbox_make_workspace "$root" "$sha")
+    if [[ $WORKING_TREE -eq 1 ]]; then
+      workspace=$(sandbox_make_working_workspace "$root")
+    else
+      workspace=$(sandbox_make_workspace "$root" "$sha")
+    fi
     review_root=$workspace
     settings_file="$workspace/.lastlight-sandbox.json"
     mkdir -p "$workspace/$OUT_DIR"
@@ -213,14 +237,21 @@ main() {
 
   # Binds the review to the exact diff it saw. The recorder refuses a marker
   # whose attestation does not match the current HEAD and diff.
+  #
+  # A working-tree review deliberately records sha:"" -- there is no commit it
+  # could honestly vouch for, and the recorder compares this against HEAD. That
+  # mismatch is the point: a pre-commit check is ADVISORY and must never be
+  # able to satisfy the push gate. Fail-safe by construction rather than by a
+  # rule someone has to remember.
   jq -n \
-    --arg sha "$sha" \
+    --arg sha "$([[ $WORKING_TREE -eq 1 ]] && echo "" || echo "$sha")" \
     --arg base "$base" \
     --arg diff "$diff_hash" \
     --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg model "$MODEL" \
     --arg iso "$([[ -n $workspace ]] && echo sandboxed || echo unsandboxed)" \
-    '{sha:$sha, base:$base, diffHash:$diff, reviewedAt:$at, runner:"independent-session", model:$model, isolation:$iso}' \
+    --arg mode "$([[ $WORKING_TREE -eq 1 ]] && echo working-tree || echo committed)" \
+    '{sha:$sha, base:$base, diffHash:$diff, reviewedAt:$at, runner:"independent-session", model:$model, isolation:$iso, mode:$mode}' \
     > "$OUT_DIR/attestation.json"
 
   printf 'Review complete: event=%s findings=%s\n' \

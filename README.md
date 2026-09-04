@@ -83,6 +83,28 @@ read-only tool list with writes scoped to `findings.json` and **no probes**.
 That is a weaker review, not an equivalent one — findings then rest on reading
 rather than execution — so the attestation records which posture produced it.
 
+## Checking work before you commit it
+
+```bash
+scripts/lastlight-review-run.sh --working-tree
+```
+
+Reviews uncommitted work — tracked modifications and untracked files — rather
+than a committed diff. A plain clone cannot do this, since it carries committed
+history only, so the workspace is assembled as: clone at HEAD → apply
+`git diff HEAD` → copy untracked-but-not-ignored files.
+
+Excluding ignored files is deliberate. It keeps `node_modules` and `.venv` out
+of the copy, so it stays fast — and a probe needing dependencies installs them
+*inside* the sandbox rather than inheriting whatever is on your disk. A poisoned
+local dependency tree cannot execute during a review it was never copied into.
+
+**This is advisory and cannot satisfy the push gate.** There is no commit it
+could honestly vouch for, so the attestation records an empty SHA, which the
+recorder compares against HEAD and refuses. That mismatch is the design, not an
+oversight: a pre-commit check must never be mistakable for a review of what you
+are about to push.
+
 **Pass bar:** `findings: []`, or every finding dismissed in
 `.lastlight/pr-review/dismissed.json` as `{"<title>": "reason"}`, each reason at
 least 25 characters. A disputed finding must not be able to strand a push — the

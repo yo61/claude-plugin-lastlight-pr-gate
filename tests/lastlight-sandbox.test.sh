@@ -105,5 +105,21 @@ echo "--- writing in the workspace cannot reach the source ---"
 echo tampered > "$WS/f.txt"
 ok "source file untouched" "$(cat "$REPO/f.txt")" "original"
 
+echo "--- working-tree workspace carries UNCOMMITTED state a clone cannot ---"
+echo modified >> "$REPO/f.txt"   # uncommitted change to a tracked file
+echo untracked > "$REPO/new.txt" # untracked, not ignored
+printf 'ignored/\n' > "$REPO/.gitignore"
+mkdir -p "$REPO/ignored" && echo junk > "$REPO/ignored/big.bin"
+git -C "$REPO" add .gitignore && git -C "$REPO" commit -qm "chore: ignore"
+
+WWS=$(cd "$REPO" && sandbox_make_working_workspace "$REPO")
+ok "uncommitted change applied" "$(rg -c modified "$WWS/f.txt" 2> /dev/null || echo 0)" "1"
+ok "untracked file copied" "$([[ -f $WWS/new.txt ]] && echo yes || echo no)" "yes"
+ok "ignored tree NOT copied" "$([[ -d $WWS/ignored ]] && echo copied || echo excluded)" "excluded"
+ok "still an independent .git" "$([[ -d $WWS/.git ]] && echo yes || echo no)" "yes"
+# The whole point of the mode: a plain clone would have none of the above.
+PLAIN=$(cd "$REPO" && sandbox_make_workspace "$REPO" "$(git -C "$REPO" rev-parse HEAD)")
+ok "a plain clone lacks it" "$(rg -c modified "$PLAIN/f.txt" 2> /dev/null || echo 0)" "0"
+
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]
