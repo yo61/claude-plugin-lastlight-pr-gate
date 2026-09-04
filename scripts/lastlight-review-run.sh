@@ -17,75 +17,22 @@
 #   that the honest path is now also the easy path, and that a review is bound
 #   to the exact diff it looked at.
 #
-# DELIBERATE DEVIATION FROM THE SKILL
-#   The skill permits *probes* -- installing dependencies and executing code to
-#   settle a question. This runner does not, because it runs unattended from a
-#   push. Set LASTLIGHT_REVIEW_TOOLS to widen it if you want probe fidelity, and
-#   know that you are granting a headless session execute access to the repo.
+# ISOLATION -- the reviewed diff is UNTRUSTED INPUT
+#   The prompt tells this session the code is not its own and not to be trusted,
+#   which makes the diff an injection surface. It runs unattended from a push.
 #
-# THREAT MODEL -- the reviewed diff is UNTRUSTED INPUT
-#   The prompt tells this session the code is not its own and not to be trusted.
-#   That makes the diff an injection surface: a payload in a reviewed file or
-#   comment can try to steer an unattended session with real tool access.
+#   So the review happens in a DISPOSABLE CLONE under an OS sandbox; see
+#   lastlight-sandbox.sh for the policy, the verified controls and the reason
+#   `--no-hardlinks` is load-bearing. Because the sandbox bounds the blast
+#   radius structurally, the reviewer gets Bash and can run PROBES -- installing
+#   a dependency, executing a test -- which the skill permits and which caught
+#   the one bypass repeated static reading had missed.
 #
-#   WRITES are therefore scoped to the single file the skill's contract needs,
-#   via an `Edit(<findings.json>)` rule and NO bare `Write` -- a bare `Write`
-#   entry is itself an unscoped allow and silently defeats the path rule
-#   (verified). Without this, an injected instruction could overwrite
-#   `lastlight-review-gate.sh` itself and silently disable the push gate this
-#   plugin exists to enforce.
-#
-#   READS are NOT scoped: the reviewer must read the repo and the staged skill
-#   assets, and file-permission rules only match `Edit(...)`. So a successful
-#   injection could still exfiltrate anything the invoking user can read, given
-#   an egress path. Treat that as the residual risk; do not run this over a
-#   diff from a source you would not run code from.
-#
-# THE PROPER FIX, DESIGNED AND VERIFIED BUT NOT YET WIRED IN
-#   Read-scoping and the no-probes restriction are both workarounds for running
-#   an untrusted diff with the invoking user's full privileges. Isolating the
-#   session removes the need for either -- and Claude Code already ships the
-#   pieces, so this needs no container.
-#
-#   Two parts:
-#     1. A DISPOSABLE COPY. Clone the repo at HEAD into a temp dir
-#        (`git clone --no-hardlinks`) and review there, so nothing the session
-#        writes can reach the real working tree or its .git.
-#
-#        A clone carries only COMMITTED state -- verified: local
-#        committed-but-unpushed commits come across, uncommitted modifications
-#        and untracked files do not. That is not a gap here, because the code
-#        under review is committed by construction: the recorder refuses a
-#        marker while the tree is dirty outside .lastlight/, and the marker
-#        vouches for a SHA, which cannot describe a working tree.
-#
-#        It is in fact a fidelity GAIN. Last Light reviews a checkout of the PR
-#        head -- committed code only -- so a clone matches what the server sees,
-#        whereas reviewing in place lets the reviewer read untracked and
-#        gitignored files the server never will.
-#
-#        The genuine consequence: this can never review work BEFORE it is
-#        committed. The order is commit -> review -> record -> push, and acting
-#        on a finding means a new commit and a fresh review. That is inherent to
-#        keying on a SHA, not something the clone introduces.
-#     2. THE BUILT-IN SANDBOX, passed to `claude -p --settings`:
-#          sandbox.enabled: true
-#          sandbox.filesystem.allowWrite: [<the temp clone>]
-#          sandbox.filesystem.denyRead:  [~/.ssh, ~/.aws, ~/.claude, .envrc, ...]
-#          sandbox.network.allowedDomains: [api.anthropic.com, ...]
-#          sandbox.credentials.envVars:  deny/mask the tokens
-#
-#   All four controls were verified on macOS (Seatbelt, sandbox-exec) on
-#   2026-09-04: a write inside allowWrite succeeded; a read of a denied path was
-#   refused; a write outside allowWrite was refused; and egress to a domain
-#   outside allowedDomains was refused. The last is the one that actually closes
-#   exfiltration, which read-scoping alone never could.
-#
-#   With that in place the read restriction stops mattering and PROBES become
-#   safe to re-enable -- which is the point, because a probe is what caught a
-#   real safety bug that static reading missed (an `rm -rf` exemption that let
-#   a disposable argument exempt a protected path beside it). The affordance
-#   this runner currently withholds is the one that found the bug.
+#   `LASTLIGHT_REVIEW_SANDBOX=off`, or a platform with no sandbox available,
+#   degrades to the earlier posture: a read-only tool list, no probes, writes
+#   scoped to the single findings.json path, and a printed warning. That is a
+#   weaker review, not an equivalent one -- findings then rest on reading rather
+#   than execution -- so the attestation records which posture produced it.
 #
 # Usage:
 #   lastlight-review-run.sh [--model <m>] [base-ref]   # base: merge-base with origin/HEAD
@@ -100,6 +47,8 @@ set -euo pipefail
 SELF_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 readonly SELF_DIR
 readonly ASSETS="${LASTLIGHT_REVIEW_DIR:-$HOME/.claude/lastlight-review}"
+# shellcheck source=scripts/lastlight-sandbox.sh
+source "$SELF_DIR/lastlight-sandbox.sh"
 readonly OUT_DIR=.lastlight/pr-review
 readonly TIMEOUT="${LASTLIGHT_REVIEW_TIMEOUT:-900}"
 # Read-only exploration plus the one Write the skill's contract requires.
@@ -184,9 +133,37 @@ main() {
   # no longer cross-check. Start clean.
   rm -f "$OUT_DIR/findings.json" "$OUT_DIR/attestation.json"
 
+  # ── Isolation ────────────────────────────────────────────────────────────
+  # Sandboxed by default. The reviewer works on a disposable clone under an OS
+  # sandbox, which is what makes PROBES safe -- and probes are what caught the
+  # one bypass that repeated static review missed.
+  local workspace="" settings_file="" review_root=$root
+  local -a extra_args=()
+  if [[ ${LASTLIGHT_REVIEW_SANDBOX:-on} != off ]] && sandbox_supported; then
+    workspace=$(sandbox_make_workspace "$root" "$sha")
+    review_root=$workspace
+    settings_file="$workspace/.lastlight-sandbox.json"
+    mkdir -p "$workspace/$OUT_DIR"
+    sandbox_settings_json "$workspace" > "$settings_file"
+    extra_args=(--settings "$settings_file")
+    # shellcheck disable=SC2064  # expand now, not at trap time
+    trap "rm -rf '$(dirname "$workspace")'" EXIT
+    cp "$OUT_DIR/diff.patch" "$workspace/$OUT_DIR/diff.patch"
+    printf '  isolated workspace: %s (probes enabled)\n' "$workspace" >&2
+  else
+    printf '  NOT SANDBOXED -- read-only review, no probes.\n' >&2
+    printf '  The reviewed diff runs with your privileges; findings rest on reading, not execution.\n' >&2
+  fi
+
   local -a tools=("${DEFAULT_TOOLS[@]}")
   if [[ -n ${LASTLIGHT_REVIEW_TOOLS:-} ]]; then
     IFS=',' read -r -a tools <<< "$LASTLIGHT_REVIEW_TOOLS"
+  fi
+  # Sandboxed, the tool allowlist stops being the security boundary -- the
+  # sandbox is -- so the reviewer gets Bash and can run things. Unsandboxed it
+  # stays the narrow read-only list, because then it IS the only boundary.
+  if [[ -n $workspace ]]; then
+    tools=(Read Grep Glob Bash)
   fi
   # The ONE write the contract needs, scoped to exactly that path. Appended
   # after any override so widening the tool list cannot accidentally drop the
@@ -201,9 +178,10 @@ main() {
   printf 'Reviewing %s against %s\n  model: %s (independent session)\n' \
     "${sha:0:12}" "${base:0:12}" "$MODEL" >&2
 
-  if ! timeout "$TIMEOUT" claude -p "$(prompt "$root" "$base" "$sha")" \
+  if ! (cd "$review_root" && timeout "$TIMEOUT" claude -p "$(prompt "$review_root" "$base" "$sha")" \
     --allowed-tools "${tools[@]}" \
-    --model "$MODEL" > "$OUT_DIR/reviewer.log" 2>&1; then
+    "${extra_args[@]}" \
+    --model "$MODEL") > "$OUT_DIR/reviewer.log" 2>&1; then
     die "the reviewer session failed or timed out; see $OUT_DIR/reviewer.log"
   fi
 
@@ -214,6 +192,11 @@ main() {
     die "the CLI rejected an allowed-tools rule, so the reviewer ran under-equipped; see $OUT_DIR/reviewer.log"
   fi
 
+  # The reviewer wrote inside the isolated workspace; bring the one artifact
+  # the contract produces back out. Nothing else crosses the boundary.
+  if [[ -n $workspace && -f "$workspace/$OUT_DIR/findings.json" ]]; then
+    cp "$workspace/$OUT_DIR/findings.json" "$OUT_DIR/findings.json"
+  fi
   [[ -f "$OUT_DIR/findings.json" ]] \
     || die "the reviewer wrote no findings.json; see $OUT_DIR/reviewer.log"
   jq -e . "$OUT_DIR/findings.json" > /dev/null 2>&1 \
@@ -227,7 +210,8 @@ main() {
     --arg diff "$diff_hash" \
     --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg model "$MODEL" \
-    '{sha:$sha, base:$base, diffHash:$diff, reviewedAt:$at, runner:"independent-session", model:$model}' \
+    --arg iso "$([[ -n $workspace ]] && echo sandboxed || echo unsandboxed)" \
+    '{sha:$sha, base:$base, diffHash:$diff, reviewedAt:$at, runner:"independent-session", model:$model, isolation:$iso}' \
     > "$OUT_DIR/attestation.json"
 
   printf 'Review complete: event=%s findings=%s\n' \
