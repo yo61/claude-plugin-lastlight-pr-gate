@@ -170,5 +170,17 @@ ok "the canary itself does not exist yet" \
 ok "the canary is not under the temp dir the work policy allows" \
   "$(case $CANARY in "${TMPDIR:-/tmp}"*) echo under ;; *) echo outside ;; esac)" "outside"
 
+echo "--- sandbox_denied_reads: the stores that actually hold tokens ---"
+denied() { sandbox_denied_reads | grep -cx "$1"; }
+# git's own HTTPS credential store. The work sandbox opens egress to github.com
+# so builds can fetch, which is the route a token read from here would leave by.
+ok "git credential store is unreadable" "$(denied "$HOME/.git-credentials")" "1"
+ok "...and its XDG location too" \
+  "$(denied "${XDG_CONFIG_HOME:-$HOME/.config}/git/credentials")" "1"
+ok "netrc, which serves the same purpose, is unreadable" "$(denied "$HOME/.netrc")" "1"
+ok "ssh keys are unreadable" "$(denied "$HOME/.ssh")" "1"
+ok "every entry is absolute" \
+  "$(sandbox_denied_reads | grep -cv '^/')" "0"
+
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]

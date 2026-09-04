@@ -40,11 +40,19 @@ set -euo pipefail
 
 # Credential stores a reviewer never needs. Denying reads is belt to the egress
 # braces: even a successful injection has nowhere to send what it cannot read.
+# `.git-credentials` is where `git config credential.helper store` writes
+# plaintext HTTPS tokens, and git also reads it from the XDG location. Its
+# absence was a gap in an otherwise systematic list rather than a decision:
+# `.netrc`, which serves the same purpose for many git setups, was already
+# here. It matters most in the work sandbox, which deliberately opens egress to
+# github.com so builds can fetch -- exactly the route a token read from an
+# unprotected file would leave by.
 sandbox_denied_reads() {
   printf '%s\n' \
     "$HOME/.ssh" "$HOME/.aws" "$HOME/.gnupg" "$HOME/.netrc" \
     "$HOME/.config/gh" "$HOME/.claude/.credentials.json" \
-    "$HOME/.docker/config.json" "$HOME/.npmrc" "$HOME/.pypirc"
+    "$HOME/.docker/config.json" "$HOME/.npmrc" "$HOME/.pypirc" \
+    "$HOME/.git-credentials" "${XDG_CONFIG_HOME:-$HOME/.config}/git/credentials"
 }
 
 # Only what the reviewer session itself needs to function. NOT the package
