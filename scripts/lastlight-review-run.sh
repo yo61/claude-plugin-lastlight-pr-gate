@@ -91,7 +91,11 @@ main() {
   # unknown flag must say so rather than be read as a ref.
   WORKING_TREE=0
   MODEL=${LASTLIGHT_REVIEW_MODEL:-$DEFAULT_MODEL}
-  while [[ ${1:-} == --* ]]; do
+  # Any leading `-`, not just `--`: a bare `-h` fell straight past a loop that
+  # only matched `--*` and landed in the base-ref slot, so the flag the
+  # `--help | -h` case below was written to serve died on a merge-base error.
+  # Refs do not begin with `-`, so an unrecognised one belongs in `*)`.
+  while [[ ${1:-} == -* ]]; do
     case $1 in
       --working-tree)
         WORKING_TREE=1
