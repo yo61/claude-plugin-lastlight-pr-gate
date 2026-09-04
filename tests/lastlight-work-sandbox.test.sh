@@ -136,8 +136,19 @@ ok "extra egress is opt-in" \
 
 # ── slots ────────────────────────────────────────────────────────────────
 echo "--- slot_for ---"
-ok "one slot per repo and branch" \
-  "$(slot_for /a/b/myrepo feat/x)" "$LASTLIGHT_WORK_ROOT/myrepo/feat/x"
+ok "the slot is under the work root, named for the repo" \
+  "$(slot_for /a/b/myrepo feat/x)" \
+  "$LASTLIGHT_WORK_ROOT/$(repo_key /a/b/myrepo)/feat/x"
+ok "the same repo always resolves to the same slot" \
+  "$(slot_for /a/b/myrepo feat/x)" "$(slot_for /a/b/myrepo feat/x)"
+# Two unrelated projects called `api` shared a slot, so `start` in one opened
+# the other's clone and `land` fetched an unrelated history into the wrong
+# repository.
+ok "repos sharing a basename do NOT share a slot" \
+  "$([[ $(slot_for /projA/api main) == "$(slot_for /projB/api main)" ]] && echo same || echo distinct)" \
+  "distinct"
+ok "...and the basename is still there to read" \
+  "$(basename "$(dirname "$(slot_for /projA/api main)")" | cut -d- -f1)" "api"
 
 echo "--- resolve ---"
 mkdir -p "$TMP/real/inner"
@@ -254,6 +265,26 @@ ok "an exact denied path is caught, not just a child" \
 # so the SHIPPED default is what gets tested, not the one this suite exports.
 ok "the shipped default work root is editable" \
   "$(env -u LASTLIGHT_WORK_ROOT bash -c 'source "$1"; workspace_is_denied "$(slot_for /a/b/repo main)/repo" && echo denied || echo ok' _ "$WORK")" "ok"
+
+echo "--- land refuses a workspace belonging to another repository ---"
+OTHER=$TMP/otherrepo
+git init --quiet -b main "$OTHER"
+git -C "$OTHER" config user.email t@example.com
+git -C "$OTHER" config user.name Test
+echo other > "$OTHER/file.txt"
+git -C "$OTHER" add file.txt
+git -C "$OTHER" commit --quiet -m "other"
+git -C "$OTHER" checkout --quiet -b squatter
+# Put a clone of the WRONG repository where this repo's workspace would live.
+SQUAT=$(slot_for "$REPO" squatter)/repo
+mkdir -p "$(dirname "$SQUAT")"
+git clone --quiet --no-hardlinks --branch squatter "$OTHER" "$SQUAT"
+out=$(cd "$REPO" && "$WORK" land -b squatter 2>&1)
+rc=$?
+ok "landing a foreign workspace fails" "$rc" "1"
+ok "...and says whose it actually is" "$(grep -c 'not a clone of this repository' <<< "$out")" "1"
+ok "...leaving no such branch behind" \
+  "$(git -C "$REPO" show-ref --verify --quiet refs/heads/squatter && echo created || echo absent)" "absent"
 
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]

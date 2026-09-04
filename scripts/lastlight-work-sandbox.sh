@@ -79,12 +79,30 @@ resolve() {
   fi
 }
 
+# A name for a repository that is unique to THAT repository.
+#
+# The basename alone is not. Two unrelated projects both called `api` shared a
+# slot, so `start` in one found the other's clone, said "reusing the existing
+# workspace", and opened it -- and `land` then fetched that unrelated history
+# into a branch of the wrong repository. The basename stays for legibility; the
+# path digest is what makes it unambiguous.
+repo_key() {
+  local root=$1 digest
+  # Canonicalise first, so the key is a property of the REPOSITORY rather than
+  # of the spelling the caller happened to use. Without this, `start` (which
+  # resolves) and a caller passing the symlinked form produced different slots
+  # for the same repo, and the workspace simply could not be found again.
+  [[ -d $root ]] && root=$(resolve "$root")
+  digest=$(printf '%s' "$root" | { shasum -a 256 2> /dev/null || sha256sum; } | cut -c1-8)
+  printf '%s-%s' "$(basename "$root")" "$digest"
+}
+
 # One slot per repository and branch. Branches nest exactly as git's own refs
 # do, so `feat` and `feat/x` collide here for the same reason git forbids them
 # both -- no new failure mode, and the layout stays readable.
 slot_for() {
   local root=$1 branch=$2
-  printf '%s/%s/%s' "$WORK_ROOT" "$(basename "$root")" "$branch"
+  printf '%s/%s/%s' "$WORK_ROOT" "$(repo_key "$root")" "$branch"
 }
 
 # The paths a file-editing tool must not touch, whatever else is allowed.
@@ -373,6 +391,16 @@ cmd_land() {
   ws=$slot/repo
   [[ -d $ws ]] || die "no workspace for $branch -- start one with: lastlight-work-sandbox.sh start -b $branch"
   require_clean_tree "$ws" "the workspace"
+  # Confirm the workspace is a clone of THIS repository before fetching from
+  # it. Slots were once keyed by basename alone, so a workspace belonging to a
+  # different project could occupy this path -- and landing it created a branch
+  # here holding that project's entire history. Unique keys make the collision
+  # impossible; this makes a wrong workspace impossible to land, whatever put
+  # it there.
+  local ws_origin
+  ws_origin=$(git -C "$ws" remote get-url origin 2> /dev/null || true)
+  [[ -n $ws_origin && $(resolve "$ws_origin") == "$root" ]] \
+    || die "the workspace at $ws is not a clone of this repository (its origin is '${ws_origin:-unset}'). Refusing to fetch from it."
   git -C "$ws" show-ref --verify --quiet "refs/heads/$branch" \
     || die "the workspace has no branch $branch"
 
@@ -393,7 +421,7 @@ cmd_land() {
 cmd_list() {
   local root repo_root slot branch ws state
   root=$(git rev-parse --show-toplevel 2> /dev/null) || die "not inside a git repository"
-  repo_root="$WORK_ROOT/$(basename "$(resolve "$root")")"
+  repo_root="$WORK_ROOT/$(repo_key "$(resolve "$root")")"
   [[ -d $repo_root ]] || {
     printf 'no workspaces for this repository\n' >&2
     return 0

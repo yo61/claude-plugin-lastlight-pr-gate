@@ -128,12 +128,18 @@ The review already runs on a disposable copy under an OS sandbox. The work that
 so a bad edit, a stray `rm`, or a command from a poisoned dependency landed on
 the only copy there was.
 
-`start` clones the branch into `~/.lastlight/work/<repo>/<branch>` (override with
+`start` clones the branch into `~/.lastlight/work/<repo>-<digest>/<branch>` (override with
 `LASTLIGHT_WORK_ROOT`), writes a policy scoped to that clone, proves the policy
 holds, and opens a session there. A clone rather than a worktree: a worktree
 keeps its git dir *inside* the real repository, so confining writes to the
 workspace would mean granting write access to the real object store — the one
 thing worth protecting. `--no-hardlinks` shares nothing.
+
+The `<digest>` is a hash of the repository's canonical path. A basename alone is
+not unique — two unrelated projects both called `api` shared a slot, so `start`
+in one found the other's clone and `land` fetched an unrelated history into the
+wrong repository. `land` additionally refuses any workspace whose `origin` is
+not this repository, whatever put it there.
 
 ### Two layers, because neither covers the other
 
