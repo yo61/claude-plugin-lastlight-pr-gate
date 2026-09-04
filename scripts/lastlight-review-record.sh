@@ -18,9 +18,17 @@
 # Usage: lastlight-review-record.sh [sha]     (default: HEAD)
 set -euo pipefail
 
+# Sibling scripts are addressed relative to this file, so the guidance in an
+# error stays correct whether this is installed under ~/.claude/hooks or inside
+# a plugin (where it lives at $CLAUDE_PLUGIN_ROOT/scripts).
+SELF_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+readonly SELF_DIR
+
 readonly MARKER_DIR=lastlight-local-review
 readonly FINDINGS=.lastlight/pr-review/findings.json
 readonly DISMISSED=.lastlight/pr-review/dismissed.json
+# Written by lastlight-review-run.sh; binds a review to the diff it read.
+readonly ATTESTATION=.lastlight/pr-review/attestation.json
 # Long enough that "n/a", "ok" and "wontfix" do not clear the bar.
 readonly MIN_REASON=25
 
@@ -49,8 +57,10 @@ main() {
     die "refusing: the working tree has uncommitted changes outside .lastlight/, so the review did not cover what will be pushed. Commit or stash first."
   fi
 
-  [[ -f "$root/$FINDINGS" ]] || die "no $FINDINGS -- run the review first (see ~/.claude/lastlight-review/skills/pr-review/SKILL.md)"
+  [[ -f "$root/$FINDINGS" ]] || die "no $FINDINGS -- run the review first: ${SELF_DIR}/lastlight-review-run.sh"
   jq -e . "$root/$FINDINGS" > /dev/null 2>&1 || die "$FINDINGS is not valid JSON"
+
+  require_attestation "$root" "$sha"
 
   local skip count event
   skip=$(jq -r '.skip // false' "$root/$FINDINGS")
@@ -88,6 +98,35 @@ main() {
     "$(cat "$HOME/.claude/lastlight-review/.version" 2> /dev/null || echo '?')" \
     "$(sed -n 's/^version: //p' "$HOME/.claude/lastlight-review/skills/pr-review/SKILL.md" 2> /dev/null | head -1)"
   printf '  push is now unblocked for this SHA. Any new commit invalidates it.\n'
+}
+
+# The review must have come from lastlight-review-run.sh, and must have looked
+# at THIS diff. Without this, findings.json is just a file anyone can write, and
+# an agent reviewing its own work can approve itself in one line -- which is the
+# exact failure this whole flow exists to avoid.
+#
+# Not tamper-proof: whoever can write findings.json can write the attestation
+# too. It makes the independent path the easy path, and binds a review to the
+# diff it actually saw, so a stale review cannot silently vouch for new code.
+require_attestation() {
+  local root=$1 sha=$2 recorded_sha recorded_diff current_diff base
+  local att="$root/$ATTESTATION"
+
+  [[ -f $att ]] || die "no $ATTESTATION -- findings.json alone is not evidence a review happened. Run: ${SELF_DIR}/lastlight-review-run.sh"
+  jq -e . "$att" > /dev/null 2>&1 || die "$ATTESTATION is not valid JSON"
+
+  recorded_sha=$(jq -r '.sha // ""' "$att")
+  [[ $recorded_sha == "$sha" ]] \
+    || die "the review attests to ${recorded_sha:0:12}, but HEAD is ${sha:0:12}. Re-run the review at HEAD."
+
+  # Recompute the diff the review claims to have read. A matching SHA is not
+  # enough on its own -- this also catches an attestation copied from elsewhere.
+  base=$(jq -r '.base // ""' "$att")
+  [[ -n $base ]] || die "$ATTESTATION records no base ref"
+  recorded_diff=$(jq -r '.diffHash // ""' "$att")
+  current_diff=$(git diff "$base"...HEAD | git hash-object --stdin)
+  [[ $recorded_diff == "$current_diff" ]] \
+    || die "the diff has changed since the review (attested ${recorded_diff:0:12}, now ${current_diff:0:12}). Re-run the review."
 }
 
 # Every finding title must carry a substantive dismissal reason.
