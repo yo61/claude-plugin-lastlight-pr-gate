@@ -159,6 +159,16 @@ main() {
   [[ -f "$ASSETS/skills/pr-review/SKILL.md" ]] \
     || die "review assets not staged -- run lastlight-review-sync.sh first"
 
+  # FAIL FAST on a dirty tree. The recorder already refuses one, but only at the
+  # very end -- so without this you pay for a full review before anything
+  # objects, and the review you paid for was incoherent anyway: it diffs
+  # `base...HEAD` (committed) while the reviewer reads files from the live
+  # working tree (uncommitted). Checking here makes "reviews run against
+  # committed code" true rather than true-by-convention.
+  if [[ -n $(git status --porcelain -- ':(exclude).lastlight/') ]]; then
+    die "the working tree has uncommitted changes outside .lastlight/. The diff under review is base...HEAD, but the reviewer reads the live tree, so the two would disagree. Commit or stash first."
+  fi
+
   mkdir -p "$OUT_DIR"
 
   # Three-dot: what this branch adds, not what main did meanwhile (SKILL.md §3).
