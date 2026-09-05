@@ -80,6 +80,13 @@ repos:
         pass_filenames: false
         files: '^(scripts|tests)/.*\.sh$'
 
+      - id: review-runner-tests
+        name: review runner suite
+        entry: env RUN=./scripts/lastlight-review-run.sh bash tests/lastlight-review-run.test.sh
+        language: system
+        pass_filenames: false
+        files: '^(scripts|tests)/.*\.sh$'
+
       - id: readme-counts
         name: README test counts match the suites
         entry: bash tests/readme-counts.sh

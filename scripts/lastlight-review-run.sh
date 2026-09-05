@@ -89,30 +89,8 @@ main() {
   # base-ref argument is read, so the mode silently did not engage and the run
   # died complaining about a merge base instead. Order must not matter, and an
   # unknown flag must say so rather than be read as a ref.
-  WORKING_TREE=0
-  MODEL=${LASTLIGHT_REVIEW_MODEL:-$DEFAULT_MODEL}
-  # Any leading `-`, not just `--`: a bare `-h` fell straight past a loop that
-  # only matched `--*` and landed in the base-ref slot, so the flag the
-  # `--help | -h` case below was written to serve died on a merge-base error.
-  # Refs do not begin with `-`, so an unrecognised one belongs in `*)`.
-  while [[ ${1:-} == -* ]]; do
-    case $1 in
-      --working-tree)
-        WORKING_TREE=1
-        shift
-        ;;
-      --model)
-        [[ -n ${2:-} ]] || die "--model needs a value"
-        MODEL=$2
-        shift 2
-        ;;
-      --help | -h)
-        sed -n '2,45p' "$0"
-        exit 0
-        ;;
-      *) die "unknown option: $1" ;;
-    esac
-  done
+  parse_options "$@"
+  set -- ${REST[@]+"${REST[@]}"}
   readonly WORKING_TREE MODEL
 
   local root sha base
@@ -298,6 +276,49 @@ main() {
   printf 'Next: %s/lastlight-review-record.sh\n' "$SELF_DIR" >&2
 }
 
+usage() {
+  # ${BASH_SOURCE[0]}, not $0: this is the file the header lives in, which is
+  # true whether the script was executed or sourced. Reading $0 printed nothing
+  # at all when a caller sourced the file and asked for help.
+  sed -n '2,45p' "${BASH_SOURCE[0]}"
+  exit 0
+}
+
+# Read the options, leaving any remaining arguments in REST.
+#
+# Extracted so it can be tested. Two bugs lived here and were each found by
+# hand: checking flags only in position one, so `--model x --working-tree` left
+# the second flag in the base-ref slot; and matching only `--*`, so a bare `-h`
+# fell through to be read as a git ref. Neither would have survived a test, and
+# neither had one.
+#
+# WORKING_TREE, MODEL and REST are set for the caller rather than returned,
+# because a function can return only a status and these are three values.
+parse_options() {
+  WORKING_TREE=0
+  MODEL=${LASTLIGHT_REVIEW_MODEL:-$DEFAULT_MODEL}
+  # Any leading `-`, not just `--`. Refs do not begin with one, so an
+  # unrecognised flag belongs in `*)` rather than being read as a base ref.
+  while [[ ${1:-} == -* ]]; do
+    case $1 in
+      --working-tree)
+        WORKING_TREE=1
+        shift
+        ;;
+      --model)
+        [[ -n ${2:-} ]] || die "--model needs a value"
+        MODEL=$2
+        shift 2
+        ;;
+      --help | -h)
+        usage
+        ;;
+      *) die "unknown option: $1" ;;
+    esac
+  done
+  REST=("$@")
+}
+
 prompt() {
   local root=$1 base=$2 sha=$3 assets=$4
   cat << PROMPT
@@ -334,4 +355,9 @@ you skip.
 PROMPT
 }
 
-main "$@"
+# Sourcing must not run anything. The test suite loads this file to exercise
+# its parsing and tool-selection directly, and without the guard doing so
+# started a real review -- which is exactly how it was discovered.
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  main "$@"
+fi

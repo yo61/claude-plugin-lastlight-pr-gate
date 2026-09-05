@@ -108,6 +108,12 @@ jobs:
       - name: work sandbox suite
         run: WORK="$PWD/scripts/lastlight-work-sandbox.sh" bash tests/lastlight-work-sandbox.test.sh
 
+      # The orchestrator decides whether the reviewer gets unrestricted Bash and
+      # writes the attestation the gate rests on. It was the only one of the
+      # four without a suite, and two of its parsing bugs were found by hand.
+      - name: review runner suite
+        run: RUN="$PWD/scripts/lastlight-review-run.sh" bash tests/lastlight-review-run.test.sh
+
       # The README promises its counts are what the suites print. Enforced
       # rather than restated: the table went stale twice and a reviewer caught
       # it both times.
