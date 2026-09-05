@@ -93,9 +93,33 @@ sandbox_allowed_domains() {
 # safe, with no network egress needed.
 read_deny_rules() {
   local path
+  # HOME AS A WHOLE, not a list of secrets inside it.
+  #
+  # A curated denylist protects what was thought of. The reviewed diff is a
+  # prompt-injection surface, and the interesting targets are not only
+  # credential files: a sibling repository's .env, a shell history, another
+  # session's transcript. Anything read this way leaves through findings.json,
+  # which is carried out of the workspace and posted as a PR comment with no
+  # human in between -- so the list has to be the boundary, not a sample of it.
+  #
+  # The workspace lives under $TMPDIR, outside $HOME, so denying $HOME costs
+  # the reviewer nothing: its diff and its skill files are staged into the
+  # workspace precisely so that nothing it needs is left behind this line.
+  printf 'Read(/%s)\nRead(/%s/**)\n' "$HOME" "$HOME"
+  # The named stores stay, because some resolve outside $HOME.
   while IFS= read -r path; do
     printf 'Read(/%s)\nRead(/%s/**)\n' "$path" "$path"
   done < <(sandbox_denied_reads)
+}
+
+# Copy the review assets into the workspace so the reviewer never has to read
+# outside it. Without this, scoping reads to the workspace would deny the
+# reviewer its own skill file, which lives under $HOME.
+sandbox_stage_assets() {
+  local assets=$1 ws=$2
+  mkdir -p "$ws/.lastlight-assets"
+  cp -R "$assets/skills" "$ws/.lastlight-assets/skills" \
+    || die "could not stage the review assets into the isolated workspace"
 }
 
 sandbox_settings_json() {

@@ -173,7 +173,7 @@ main() {
   # Sandboxed by default. The reviewer works on a disposable clone under an OS
   # sandbox, which is what makes PROBES safe -- and probes are what caught the
   # one bypass that repeated static review missed.
-  local workspace="" settings_file="" review_root=$root
+  local workspace="" settings_file="" review_root=$root assets_root=$ASSETS
   local -a extra_args=()
   if [[ ${LASTLIGHT_REVIEW_SANDBOX:-on} != off ]] && sandbox_supported; then
     if [[ $WORKING_TREE -eq 1 ]]; then
@@ -189,6 +189,10 @@ main() {
     # shellcheck disable=SC2064  # expand now, not at trap time
     trap "rm -rf '$(dirname "$workspace")'" EXIT
     cp "$OUT_DIR/diff.patch" "$workspace/$OUT_DIR/diff.patch"
+    # Staged, not referenced in place: reads are scoped to the workspace, so
+    # anything the reviewer needs has to be inside it.
+    sandbox_stage_assets "$ASSETS" "$workspace"
+    assets_root="$workspace/.lastlight-assets"
 
     # PROVE it before trusting it. A settings file that fails validation is
     # silently ignored in -p mode, which would leave a reviewer holding
@@ -239,7 +243,7 @@ main() {
   # is empty by construction -- "failed or timed out; see the log" then sent the
   # reader to an empty file, which is where this message used to end.
   local rc=0
-  (cd "$review_root" && timeout "$TIMEOUT" claude -p "$(prompt "$review_root" "$base" "$sha")" \
+  (cd "$review_root" && timeout "$TIMEOUT" claude -p "$(prompt "$review_root" "$base" "$sha" "$assets_root")" \
     --allowed-tools "${tools[@]}" \
     "${extra_args[@]}" \
     --model "$MODEL") > "$OUT_DIR/reviewer.log" 2>&1 || rc=$?
@@ -295,7 +299,7 @@ main() {
 }
 
 prompt() {
-  local root=$1 base=$2 sha=$3
+  local root=$1 base=$2 sha=$3 assets=$4
   cat << PROMPT
 You are reviewing a pull request. You did NOT write this code — review it as an
 independent reviewer would, and do not assume the author's reasoning was sound.
@@ -303,12 +307,12 @@ independent reviewer would, and do not assume the author's reasoning was sound.
 Follow the instructions in this skill file EXACTLY, including its findings
 schema and its precision bar:
 
-  ${ASSETS}/skills/pr-review/SKILL.md
-  ${ASSETS}/skills/pr-review/references/findings-schema.md
+  ${assets}/skills/pr-review/SKILL.md
+  ${assets}/skills/pr-review/references/findings-schema.md
 
 Its companion skill, referenced by that file, is at:
 
-  ${ASSETS}/skills/code-review/SKILL.md
+  ${assets}/skills/code-review/SKILL.md
 
 Context for the review:
   repository root : ${root}

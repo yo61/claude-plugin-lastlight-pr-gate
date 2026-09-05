@@ -220,5 +220,20 @@ done < <(sandbox_denied_reads)
 ok "every review rule uses the doubled slash" \
   "$(jq -r '[.permissions.deny[] | select(test("^Read\\(//[^/]") | not)] | length' <<< "$REVIEW_POLICY")" "0"
 
+echo "--- reads are scoped, not enumerated ---"
+# A curated denylist protects what was thought of. The reviewed diff is a
+# prompt-injection surface, and the interesting targets are not only credential
+# files -- a sibling repository's .env, a shell history, another session's
+# transcript. Anything read leaves through findings.json, which is carried out
+# of the workspace and posted as a PR comment with no human in between.
+ok "the whole home directory is denied" \
+  "$(jq -r --arg h "$HOME" '[.permissions.deny[] | select(. == "Read(/" + $h + "/**)")] | length' <<< "$REVIEW_POLICY")" "1"
+ok "...including the directory itself" \
+  "$(jq -r --arg h "$HOME" '[.permissions.deny[] | select(. == "Read(/" + $h + ")")] | length' <<< "$REVIEW_POLICY")" "1"
+# The workspace lives under $TMPDIR, outside $HOME, so this costs the reviewer
+# nothing -- provided everything it needs is staged inside.
+ok "the workspace is not caught by that" \
+  "$(case "$TMP/ws" in "$HOME"/*) echo inside ;; *) echo outside ;; esac)" "outside"
+
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]
