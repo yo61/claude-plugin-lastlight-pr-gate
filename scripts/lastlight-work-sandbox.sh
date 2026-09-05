@@ -184,8 +184,13 @@ work_settings_json() {
 }
 
 # A work session needs more of the network than a review does: it builds.
+#
+# Built on the BASE list, not on the review's. Deriving it from
+# sandbox_allowed_domains pulled in LASTLIGHT_REVIEW_EGRESS as well, so a host
+# opted into for a review probe was silently reachable here too -- in the
+# sandbox that also holds Write and Edit.
 work_allowed_domains() {
-  sandbox_allowed_domains
+  sandbox_base_domains
   printf '%s\n' github.com api.github.com codeload.github.com objects.githubusercontent.com
   if [[ -n ${LASTLIGHT_WORK_EGRESS:-} ]]; then
     tr ',' '\n' <<< "$LASTLIGHT_WORK_EGRESS"

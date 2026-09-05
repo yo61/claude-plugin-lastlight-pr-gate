@@ -58,8 +58,22 @@ sandbox_denied_reads() {
 # Only what the reviewer session itself needs to function. NOT the package
 # registries: installing dependencies is a probe affordance, opted into with
 # LASTLIGHT_REVIEW_EGRESS, and every added host widens the exfiltration path.
-sandbox_allowed_domains() {
+# What any sandboxed session needs to reach, whatever it is doing.
+sandbox_base_domains() {
   printf '%s\n' api.anthropic.com statsig.anthropic.com sentry.io
+}
+
+# The REVIEW sandbox's allowlist: the base, plus whatever the operator opted
+# into for this kind of session.
+#
+# The override is read here and not in sandbox_base_domains, so it cannot reach
+# a different sandbox. It did: the work sandbox built its list on top of this
+# function, so a host allowed for a review's probe was silently reachable from
+# a work session too -- one that also holds Write and Edit, and whose stated
+# threat is a poisoned dependency. The two variables are named for separate
+# scopes and now have them.
+sandbox_allowed_domains() {
+  sandbox_base_domains
   if [[ -n ${LASTLIGHT_REVIEW_EGRESS:-} ]]; then
     tr ',' '\n' <<< "$LASTLIGHT_REVIEW_EGRESS"
   fi

@@ -235,5 +235,13 @@ ok "...including the directory itself" \
 ok "the workspace is not caught by that" \
   "$(case "$TMP/ws" in "$HOME"/*) echo inside ;; *) echo outside ;; esac)" "outside"
 
+echo "--- egress overrides stay in their own scope ---"
+ok "the review override reaches the review list" \
+  "$(LASTLIGHT_REVIEW_EGRESS=probe.example.com sandbox_allowed_domains | grep -c '^probe\.example\.com$')" "1"
+ok "...and not the base every sandbox shares" \
+  "$(LASTLIGHT_REVIEW_EGRESS=probe.example.com sandbox_base_domains | grep -c '^probe\.example\.com$')" "0"
+ok "the base still carries the model endpoint" \
+  "$(sandbox_base_domains | grep -c '^api\.anthropic\.com$')" "1"
+
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]

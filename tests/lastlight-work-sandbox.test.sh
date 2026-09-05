@@ -144,6 +144,11 @@ ok "the forge is reachable, because work fetches" \
   "$(work_allowed_domains | grep -c '^github\.com$')" "1"
 ok "extra egress is opt-in" \
   "$(LASTLIGHT_WORK_EGRESS=example.com,example.org work_allowed_domains | grep -c '^example\.org$')" "1"
+# The review's override must not reach here. A host opted into for a review
+# probe was silently reachable from a work session too -- the one that also
+# holds Write and Edit, and whose stated threat is a poisoned dependency.
+ok "the review's egress override does NOT leak in" \
+  "$(LASTLIGHT_REVIEW_EGRESS=exfil.example.com work_allowed_domains | grep -c '^exfil\.example\.com$')" "0"
 
 # ── slots ────────────────────────────────────────────────────────────────
 echo "--- slot_for ---"
