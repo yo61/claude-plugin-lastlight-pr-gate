@@ -272,7 +272,7 @@ for t in tests/*.test.sh; do bash "$t"; done
 |---|---|---|
 | `lastlight-review-gate.test.sh` | 44 | what is gated, what is allowed through |
 | `lastlight-review-record.test.sh` | 10 | the pass bar and the attestation binding |
-| `lastlight-sandbox.test.sh` | 62 | review isolation and the containment verdict |
+| `lastlight-sandbox.test.sh` | 67 | review isolation and the containment verdict |
 | `lastlight-work-sandbox.test.sh` | 86 | work isolation, policy spelling, landing |
 
 Counts are what each suite prints when you run it, not a count of lines that

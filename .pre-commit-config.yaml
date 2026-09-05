@@ -80,6 +80,13 @@ repos:
         pass_filenames: false
         files: '^(scripts|tests)/.*\.sh$'
 
+      - id: readme-counts
+        name: README test counts match the suites
+        entry: bash tests/readme-counts.sh
+        language: system
+        pass_filenames: false
+        files: '^(README\.md|tests/.*\.test\.sh)$'
+
   - repo: https://github.com/alessandrojcm/commitlint-pre-commit-hook
     rev: v9.26.0
     hooks:

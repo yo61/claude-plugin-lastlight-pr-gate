@@ -107,3 +107,9 @@ jobs:
       # dropped here costs more than anywhere else in this repo.
       - name: work sandbox suite
         run: WORK="$PWD/scripts/lastlight-work-sandbox.sh" bash tests/lastlight-work-sandbox.test.sh
+
+      # The README promises its counts are what the suites print. Enforced
+      # rather than restated: the table went stale twice and a reviewer caught
+      # it both times.
+      - name: README test counts
+        run: bash tests/readme-counts.sh
