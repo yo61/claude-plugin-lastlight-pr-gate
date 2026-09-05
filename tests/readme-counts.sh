@@ -28,8 +28,21 @@ while read -r suite want; do
     fail=1
     continue
   fi
-  got=$(bash "tests/$suite" 2>&1 | sed -n 's/^passed \([0-9][0-9]*\).*/\1/p' | tail -1)
-  if [[ -z $got ]]; then
+  # Run it SEPARATELY from reading its output. Piping the suite straight into
+  # sed put its exit status under `set -e` and pipefail, so the first genuinely
+  # failing suite aborted this script right here -- before any check ran and
+  # before anything was printed. A script written because a stale number failed
+  # quietly then failed quietly itself, with zero bytes of output, in exactly
+  # the case it exists to explain.
+  suite_rc=0
+  suite_out=$(bash "tests/$suite" 2>&1) || suite_rc=$?
+  got=$(printf '%s\n' "$suite_out" | sed -n 's/^passed \([0-9][0-9]*\).*/\1/p' | tail -1)
+
+  if [[ $suite_rc -ne 0 ]]; then
+    printf 'tests/%s failed (exit %s), so its count proves nothing:\n%s\n' \
+      "$suite" "$suite_rc" "$suite_out" >&2
+    fail=1
+  elif [[ -z $got ]]; then
     printf 'tests/%s printed no total to compare against\n' "$suite" >&2
     fail=1
   elif [[ $got != "$want" ]]; then
