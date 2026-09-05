@@ -50,7 +50,17 @@ ok "sandbox enabled" "$(jq -r '.sandbox.enabled' <<< "$POLICY")" "true"
 ok "fails rather than degrades" "$(jq -r '.sandbox.failIfUnavailable' <<< "$POLICY")" "true"
 ok "bash auto-allowed (probes)" "$(jq -r '.sandbox.autoAllowBashIfSandboxed' <<< "$POLICY")" "true"
 ok "hooks disabled" "$(jq -r '.disableAllHooks' <<< "$POLICY")" "true"
-ok "writes confined to the ws" "$(jq -r '.sandbox.filesystem.allowWrite | join(",")' <<< "$POLICY")" "$TMP/ws"
+ok "writes include the workspace" \
+  "$(jq -r --arg w "$TMP/ws" '.sandbox.filesystem.allowWrite | index($w) != null' <<< "$POLICY")" "true"
+# ...and a scratch directory, because the reviewer is meant to run probes and
+# nearly every package manager, build tool and test runner stages through
+# $TMPDIR. Without it `mktemp -d` fails while the runner still says "probes
+# enabled" -- observed from inside a review running under this policy.
+ok "...and a scratch directory for probes" \
+  "$(jq -r '.sandbox.filesystem.allowWrite | length' <<< "$POLICY")" "2"
+ok "...and nothing else" \
+  "$(jq -r --arg w "$TMP/ws" --arg t "$(cd "${TMPDIR:-/tmp}" && pwd -P)" \
+    '[.sandbox.filesystem.allowWrite[] | select(. != $w and . != $t)] | length' <<< "$POLICY")" "0"
 
 echo "--- credential stores are denied for reading ---"
 for p in .ssh .aws .gnupg .netrc .config/gh .claude/.credentials.json; do

@@ -99,9 +99,17 @@ read_deny_rules() {
 }
 
 sandbox_settings_json() {
-  local workspace=$1
+  local workspace=$1 tmp
+  # A scratch directory, because the whole point of this sandbox is that the
+  # reviewer may run PROBES -- install a dependency, execute a test -- and
+  # almost every package manager, build tool and test runner stages through
+  # $TMPDIR. Without it `mktemp -d` fails with "Operation not permitted" and
+  # every such probe dies while the runner still prints "probes enabled".
+  # Verified from inside a review running under this very policy.
+  tmp=$(cd "${TMPDIR:-/tmp}" && pwd -P)
   jq -n \
     --arg ws "$workspace" \
+    --arg tmp "$tmp" \
     --argjson deny "$(sandbox_denied_reads | jq -R . | jq -s .)" \
     --argjson net "$(sandbox_allowed_domains | jq -R . | jq -s .)" \
     --argjson readdeny "$(read_deny_rules | jq -R . | jq -s .)" \
@@ -111,7 +119,7 @@ sandbox_settings_json() {
         enabled: true,
         autoAllowBashIfSandboxed: true,
         failIfUnavailable: true,
-        filesystem: { allowWrite: [$ws], denyRead: $deny },
+        filesystem: { allowWrite: [$ws, $tmp], denyRead: $deny },
         network: { allowedDomains: $net }
       },
       permissions: { deny: $readdeny }
