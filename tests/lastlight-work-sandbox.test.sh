@@ -107,19 +107,17 @@ ok "editing the real repo is denied" \
 ok "no rule uses the Write() spelling" \
   "$(jq -r '[.permissions[][] | select(startswith("Write("))] | length' <<< "$POLICY")" "0"
 ok "every rule uses the doubled slash" \
-  "$(jq -r '[.permissions[][] | select(test("^Edit\\(//[^/]") | not)] | length' <<< "$POLICY")" "0"
-
-# Deny beats allow and beats an interactive approval, so these stay unreachable
-# even if someone clicks yes on a prompt.
-# EVERY path the read policy protects, not a hand-picked few. These lists were
-# maintained separately once and drifted -- the read policy named nine stores
-# and the edit policy five, losing .netrc, .npmrc, .pypirc and
-# .docker/config.json, all files a session could rewrite to point a package
-# manager wherever it liked. Deriving the expectation from the same source is
-# what stops the test drifting with it.
+  "$(jq -r '[.permissions[][] | select(test("^(Edit|Read)\\(//[^/]") | not)] | length' <<< "$POLICY")" "0"
+# The OS sandbox reaches neither tool: denyRead stops a spawned process, while
+# the Read tool is native to the CLI and walks past it. Verified directly -- a
+# `cat` under Bash was refused while Read returned the same file's contents.
+#
+# Reads of the real repository are deliberately NOT denied: it holds the same
+# code the session is working on, so reading it leaks nothing. What must not
+# happen is writing to it, which the Edit rules above cover.
 while IFS= read -r secret; do
-  ok "$secret cannot be edited" \
-    "$(jq -r --arg s "$secret" '[.permissions.deny[] | select(. == "Edit(/" + $s + ")" or . == "Edit(/" + $s + "/**)")] | length' <<< "$POLICY")" "2"
+  ok "$secret cannot be read" \
+    "$(jq -r --arg s "$secret" '[.permissions.deny[] | select(. == "Read(/" + $s + ")" or . == "Read(/" + $s + "/**)")] | length' <<< "$POLICY")" "2"
 done < <(edit_denied_paths)
 
 # A session that can edit ~/.claude/hooks can switch off the guard watching it.

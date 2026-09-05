@@ -193,5 +193,22 @@ ok "ssh keys are unreadable" "$(denied "$HOME/.ssh")" "1"
 ok "every entry is absolute" \
   "$(sandbox_denied_reads | grep -cv '^/')" "0"
 
+echo "--- read_deny_rules: the Read tool needs its own rules ---"
+REVIEW_POLICY=$(sandbox_settings_json /ws)
+# sandbox.filesystem.denyRead confines spawned processes only. Verified: with
+# denyRead naming the directory, a `cat` under Bash was refused while the Read
+# tool returned the file's contents in the same session. The review sandbox
+# shipped with no permissions block at all, and the reviewed diff is untrusted
+# by construction -- a prompt injection could have it read a credential and copy
+# it into findings.json, the one file carried back out of the workspace.
+ok "the review policy denies reads by rule, not only by sandbox" \
+  "$(jq -r '.permissions.deny | length > 0' <<< "$REVIEW_POLICY")" "true"
+while IFS= read -r secret; do
+  ok "$secret cannot be Read" \
+    "$(jq -r --arg s "$secret" '[.permissions.deny[] | select(. == "Read(/" + $s + ")" or . == "Read(/" + $s + "/**)")] | length' <<< "$REVIEW_POLICY")" "2"
+done < <(sandbox_denied_reads)
+ok "every review rule uses the doubled slash" \
+  "$(jq -r '[.permissions.deny[] | select(test("^Read\\(//[^/]") | not)] | length' <<< "$REVIEW_POLICY")" "0"
+
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]

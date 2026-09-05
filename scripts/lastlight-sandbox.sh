@@ -76,12 +76,35 @@ sandbox_allowed_domains() {
 # `failIfUnavailable` makes an unavailable sandbox an error rather than a silent
 # downgrade. The caller decides what to do about it; it must not quietly run a
 # probe-enabled review unconfined.
+# Permission rules denying READS of every credential store, in both the file
+# and the directory spelling.
+#
+# sandbox.filesystem.denyRead confines SPAWNED PROCESSES only. The Read tool is
+# native to the CLI and never sees it: verified directly -- with denyRead naming
+# the directory, a `cat` under Bash was refused while the Read tool returned the
+# file's contents in the same session. That is the same asymmetry already
+# documented here for Write, and the review sandbox shipped with no permissions
+# block at all, so it applied to Read too and nobody had written it down.
+#
+# It matters because the reviewed diff is untrusted by construction. A prompt
+# injection could tell the reviewer to read a credential and copy it into a
+# finding, and findings.json is the one file deliberately carried back out of
+# the workspace -- so the secret leaves through the channel the README calls
+# safe, with no network egress needed.
+read_deny_rules() {
+  local path
+  while IFS= read -r path; do
+    printf 'Read(/%s)\nRead(/%s/**)\n' "$path" "$path"
+  done < <(sandbox_denied_reads)
+}
+
 sandbox_settings_json() {
   local workspace=$1
   jq -n \
     --arg ws "$workspace" \
     --argjson deny "$(sandbox_denied_reads | jq -R . | jq -s .)" \
     --argjson net "$(sandbox_allowed_domains | jq -R . | jq -s .)" \
+    --argjson readdeny "$(read_deny_rules | jq -R . | jq -s .)" \
     '{
       disableAllHooks: true,
       sandbox: {
@@ -90,7 +113,8 @@ sandbox_settings_json() {
         failIfUnavailable: true,
         filesystem: { allowWrite: [$ws], denyRead: $deny },
         network: { allowedDomains: $net }
-      }
+      },
+      permissions: { deny: $readdeny }
     }'
 }
 

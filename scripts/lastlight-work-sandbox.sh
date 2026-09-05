@@ -118,9 +118,12 @@ slot_for() {
 # that can edit ~/.claude/hooks or ~/.claude/settings.json can switch off the
 # guard that is watching it.
 #
-# Each path yields two rules, for the file form and the directory form. Which
-# one a path needs is not knowable here -- some do not exist yet -- and a rule
-# that matches nothing costs nothing.
+# Each path yields rules for the file form and the directory form, for Edit and
+# for Read alike. Which spelling a path needs is not knowable here -- some do
+# not exist yet -- and a rule that matches nothing costs nothing.
+#
+# Read as well as Edit, because the OS sandbox reaches neither. denyRead stops
+# a spawned process; the Read tool is native to the CLI and walks past it.
 edit_denied_paths() {
   sandbox_denied_reads
   printf '%s\n' "$HOME/.claude"
@@ -163,6 +166,7 @@ work_settings_json() {
     --arg home "$HOME" \
     --argjson deny "$(sandbox_denied_reads | jq -R . | jq -s .)" \
     --argjson secrets "$(edit_denied_paths | jq -R . | jq -s 'map("Edit(/" + . + ")", "Edit(/" + . + "/**)")')" \
+    --argjson readdeny "$(edit_denied_paths | jq -R . | jq -s 'map("Read(/" + . + ")", "Read(/" + . + "/**)")')" \
     --argjson net "$(work_allowed_domains | jq -R . | jq -s .)" \
     '{
       sandbox: {
@@ -174,7 +178,7 @@ work_settings_json() {
       },
       permissions: {
         allow: ["Edit(/\($ws)/**)"],
-        deny: (["Edit(/\($root)/**)"] + $secrets)
+        deny: (["Edit(/\($root)/**)"] + $secrets + $readdeny)
       }
     }'
 }
