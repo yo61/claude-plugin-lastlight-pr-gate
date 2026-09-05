@@ -194,11 +194,13 @@ main() {
     # silently ignored in -p mode, which would leave a reviewer holding
     # unrestricted Bash with no confinement at all. Never infer the sandbox
     # from having asked for it.
-    if sandbox_verify "$settings_file" "$workspace"; then
-      printf '  isolated workspace: %s (containment verified, probes enabled)\n' "$workspace" >&2
-    else
-      die "the sandbox did not engage -- a canary escaped the workspace. Refusing to run a probe-enabled review unconfined. Re-run with LASTLIGHT_REVIEW_SANDBOX=off for a read-only review."
-    fi
+    local verify_rc=0
+    sandbox_verify "$settings_file" "$workspace" || verify_rc=$?
+    case $verify_rc in
+      0) printf '  isolated workspace: %s (containment verified, probes enabled)\n' "$workspace" >&2 ;;
+      2) die "could not tell whether the sandbox engaged: the containment probe did not complete. That is usually the model being unavailable -- a session limit, an auth failure, a timeout -- rather than anything wrong with the sandbox. Refusing to guess. Re-run when it is available, or use LASTLIGHT_REVIEW_SANDBOX=off for a read-only review." ;;
+      *) die "the sandbox did not engage -- a canary escaped the workspace. Refusing to run a probe-enabled review unconfined. Re-run with LASTLIGHT_REVIEW_SANDBOX=off for a read-only review." ;;
+    esac
   else
     printf '  NOT SANDBOXED -- read-only review, no probes.\n' >&2
     printf '  The reviewed diff runs with your privileges; findings rest on reading, not execution.\n' >&2

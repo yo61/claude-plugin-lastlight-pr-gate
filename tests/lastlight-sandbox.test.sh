@@ -122,24 +122,35 @@ PLAIN=$(cd "$REPO" && sandbox_make_workspace "$REPO" "$(git -C "$REPO" rev-parse
 ok "a plain clone lacks it" "$(rg -c modified "$PLAIN/f.txt" 2> /dev/null || echo 0)" "0"
 
 echo "--- sandbox_probe_verdict: inconclusive fails closed ---"
-verdict() { sandbox_probe_verdict "$1" "$2" && echo pass || echo fail; }
+# Three outcomes: a proven refusal, a write that got out, and a probe that
+# could not say. The last two both refuse to proceed but mean opposite things,
+# and the caller reports them differently.
+verdict() {
+  local rc=0
+  sandbox_probe_verdict "$1" "$2" || rc=$?
+  case $rc in
+    0) echo pass ;;
+    2) echo inconclusive ;;
+    *) echo escaped ;;
+  esac
+}
 # The only outcome that may enable probes: the probe ran, attempted the escape,
 # and something refused it.
 ok "blocked escape, fully accounted for" "$(verdict 0 'ran rc=1')" "pass"
 ok "blocked escape, other errno" "$(verdict 0 'ran rc=13')" "pass"
 # The regression this function exists for: a probe that never ran leaves the
 # canary absent, which is NOT the same as the sandbox having stopped it.
-ok "probe never ran (timeout/auth/model)" "$(verdict 0 '')" "fail"
-ok "probe ran but never attempted the escape" "$(verdict 0 'ran')" "fail"
-ok "report truncated mid-write" "$(verdict 0 'ran rc=')" "fail"
-ok "report is not ours" "$(verdict 0 'something else')" "fail"
+ok "probe never ran (timeout/auth/model)" "$(verdict 0 '')" "inconclusive"
+ok "probe ran but never attempted the escape" "$(verdict 0 'ran')" "inconclusive"
+ok "report truncated mid-write" "$(verdict 0 'ran rc=')" "inconclusive"
+ok "report is not ours" "$(verdict 0 'something else')" "inconclusive"
 # A bare status with no claim to have run is not a report about this probe.
-ok "status with no report around it" "$(verdict 0 '1')" "fail"
+ok "status with no report around it" "$(verdict 0 '1')" "inconclusive"
 # A write that reports success while leaving no file behind is unexplained.
-ok "escape reported as succeeding, no canary" "$(verdict 0 'ran rc=0')" "fail"
+ok "escape reported as succeeding, no canary" "$(verdict 0 'ran rc=0')" "inconclusive"
 # Containment failure outranks every account the probe gives of itself.
-ok "canary escaped, probe claims refusal" "$(verdict 1 'ran rc=1')" "fail"
-ok "canary escaped, probe silent" "$(verdict 1 '')" "fail"
+ok "canary escaped, probe claims refusal" "$(verdict 1 'ran rc=1')" "escaped"
+ok "canary escaped, probe silent" "$(verdict 1 '')" "escaped"
 
 echo "--- untracked files are copied faithfully, not approximately ---"
 mkdir -p "$REPO/nested/deep"

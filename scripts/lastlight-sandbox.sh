@@ -213,9 +213,15 @@ sandbox_escape_canary() {
 #   $1  1 if the escape canary exists outside the workspace, 0 if not
 #   $2  what the probe wrote about itself, empty if it wrote nothing
 #
-# Returns 0 only on a positive, complete account of a blocked escape.
+# Returns 0 only on a positive, complete account of a blocked escape; 1 when a
+# write got out; 2 when the probe could not say.
 sandbox_probe_verdict() {
   local escaped=$1 report=$2 rc
+  # THREE outcomes, not two. Both failures refuse to proceed, but they mean
+  # opposite things and the caller says so: 1 is a sandbox that let a write
+  # through, 2 is a probe that could not tell us either way. Collapsing them
+  # made a session-limit failure report itself as "a canary escaped the
+  # workspace" -- a containment breach that had not happened.
   [[ $escaped -eq 0 ]] || return 1 # the sandbox did not hold
 
   # Two conditions, each doing work the other does not. An earlier version had
@@ -227,11 +233,11 @@ sandbox_probe_verdict() {
   # The prefix was really there. Without this a report of bare `1` -- no claim
   # to have run, no claim to have attempted anything -- satisfies the status
   # test below on its own.
-  [[ $report != "$rc" ]] || return 1
+  [[ $report != "$rc" ]] || return 2
   # ...and what follows it is a genuine non-zero status. `ran rc=` is a report
   # cut off mid-write, and `ran rc=0` is a write that reports success while
   # leaving no file behind; neither is an account of a refused escape.
-  [[ $rc =~ ^[1-9][0-9]*$ ]] || return 1
+  [[ $rc =~ ^[1-9][0-9]*$ ]] || return 2
   return 0
 }
 
