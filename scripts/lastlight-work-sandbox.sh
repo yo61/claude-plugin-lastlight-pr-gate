@@ -409,8 +409,23 @@ cmd_land() {
     || die "the workspace has no branch $branch"
 
   before=$(git -C "$root" rev-parse --verify --quiet "refs/heads/$branch" || true)
-  git -C "$root" fetch --quiet "$ws" "refs/heads/$branch:refs/heads/$branch" \
-    || die "refusing to land: $branch in the repository is not an ancestor of the workspace's. The two have diverged -- reconcile them by hand."
+  # git refuses to fetch INTO a branch that is checked out, and that is the
+  # normal case here rather than an odd one: `start` defaults to the branch the
+  # repository is already on and never moves it, so landing back onto that same
+  # branch hit the refusal every time. Worse, the failure was reported as
+  # history divergence, sending the reader to reconcile a conflict that did not
+  # exist. The suite missed it because its own case switched away first.
+  #
+  # When it IS the checked-out branch, fast-forward the working tree instead --
+  # still ff-only, and still refusing a dirty tree, so nothing is overwritten.
+  if [[ $(git -C "$root" symbolic-ref --quiet --short HEAD || true) == "$branch" ]]; then
+    require_clean_tree "$root" "the repository"
+    git -C "$root" pull --quiet --ff-only "$ws" "refs/heads/$branch" \
+      || die "refusing to land: $branch in the repository is not an ancestor of the workspace's. The two have diverged -- reconcile them by hand."
+  else
+    git -C "$root" fetch --quiet "$ws" "refs/heads/$branch:refs/heads/$branch" \
+      || die "refusing to land: $branch in the repository is not an ancestor of the workspace's. The two have diverged -- reconcile them by hand."
+  fi
   after=$(git -C "$root" rev-parse "refs/heads/$branch")
 
   if [[ $before == "$after" ]]; then

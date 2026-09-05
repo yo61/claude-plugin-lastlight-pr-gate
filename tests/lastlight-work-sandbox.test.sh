@@ -120,6 +120,19 @@ while IFS= read -r secret; do
     "$(jq -r --arg s "$secret" '[.permissions.deny[] | select(. == "Read(/" + $s + ")" or . == "Read(/" + $s + "/**)")] | length' <<< "$POLICY")" "2"
 done < <(edit_denied_paths)
 
+# Deny beats allow and beats an interactive approval, so these stay unreachable
+# even if someone clicks yes on a prompt.
+# EVERY path the read policy protects, not a hand-picked few. These lists were
+# maintained separately once and drifted -- the read policy named nine stores
+# and the edit policy five, losing .netrc, .npmrc, .pypirc and
+# .docker/config.json, all files a session could rewrite to point a package
+# manager wherever it liked. Deriving the expectation from the same source is
+# what stops the test drifting with it.
+while IFS= read -r secret; do
+  ok "$secret cannot be edited" \
+    "$(jq -r --arg s "$secret" '[.permissions.deny[] | select(. == "Edit(/" + $s + ")" or . == "Edit(/" + $s + "/**)")] | length' <<< "$POLICY")" "2"
+done < <(edit_denied_paths)
+
 # A session that can edit ~/.claude/hooks can switch off the guard watching it.
 ok "the agent's own configuration is denied" \
   "$(jq -r --arg h "$HOME" '[.permissions.deny[] | select(. == "Edit(/" + $h + "/.claude/**)")] | length' <<< "$POLICY")" "1"
@@ -283,6 +296,40 @@ ok "landing a foreign workspace fails" "$rc" "1"
 ok "...and says whose it actually is" "$(grep -c 'not a clone of this repository' <<< "$out")" "1"
 ok "...leaving no such branch behind" \
   "$(git -C "$REPO" show-ref --verify --quiet refs/heads/squatter && echo created || echo absent)" "absent"
+
+echo "--- land onto the branch the repository is sitting on ---"
+# The natural flow: start on the branch you are already on, work, land back.
+# git refuses to fetch into a checked-out branch, and that refusal used to be
+# reported as history divergence -- sending the reader to fix a conflict that
+# did not exist. The old suite hid this by switching away first.
+git -C "$REPO" checkout --quiet -b feat/onbranch
+git -C "$REPO" commit --quiet --allow-empty -m "base for onbranch"
+WS3=$(slot_for "$REPO" feat/onbranch)/repo
+make_workspace "$REPO" feat/onbranch "$WS3"
+git -C "$WS3" config user.email t@example.com
+git -C "$WS3" config user.name Test
+echo landed > "$WS3/file.txt"
+git -C "$WS3" commit --quiet -am "work done in the sandbox"
+out=$(cd "$REPO" && "$WORK" land -b feat/onbranch 2>&1)
+rc=$?
+ok "landing onto the checked-out branch succeeds" "$rc" "0"
+ok "...and does not blame divergence" "$(grep -c diverged <<< "$out")" "0"
+ok "...the branch actually moved" \
+  "$(git -C "$REPO" log -1 --format=%s feat/onbranch)" "work done in the sandbox"
+# ff-only into a live working tree, so the files must be updated too, not just
+# the ref -- a ref moved out from under the tree would be worse than an error.
+ok "...and the working tree matches it" "$(cat "$REPO/file.txt")" "landed"
+
+# A dirty tree must not be fast-forwarded over.
+echo scribble > "$REPO/file.txt"
+echo more > "$WS3/file.txt"
+git -C "$WS3" commit --quiet -am "second"
+out=$(cd "$REPO" && "$WORK" land -b feat/onbranch 2>&1)
+rc=$?
+ok "a dirty repository refuses to land" "$rc" "1"
+ok "...and says to commit or stash" "$(grep -c 'Commit or stash' <<< "$out")" "1"
+git -C "$REPO" checkout --quiet -- file.txt
+git -C "$REPO" checkout --quiet main
 
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]
