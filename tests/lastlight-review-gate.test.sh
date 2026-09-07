@@ -9,7 +9,16 @@
 # The repo deliberately has NO remote: the gate must still decide correctly,
 # which is what proves it never depended on the network.
 set -uo pipefail
-GATE="${GATE:-$HOME/.claude/hooks/lastlight-review-gate.sh}"
+# Default to the copy IN THIS REPO, not the one installed under ~/.claude.
+# A suite that defaults to the installed copy tests whatever the machine
+# happens to have: it passes on a developer box that already has the plugin
+# and fails outright on a fresh checkout, which is every CI runner. The three
+# newer suites here already resolve from ../scripts; these two did not, so
+# `tests/readme-counts.sh` -- which invokes each suite with no environment --
+# broke in CI and in the pre-commit hook for anyone without an install.
+#
+# The override still works, and CI still passes one explicitly.
+GATE="${GATE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)/lastlight-review-gate.sh}"
 pass=0
 fail=0
 

@@ -8,7 +8,16 @@
 #
 # Run: bash tests/lastlight-review-record.test.sh
 set -uo pipefail
-RECORD="${RECORD:-$HOME/.claude/hooks/lastlight-review-record.sh}"
+# Default to the copy IN THIS REPO, not the one installed under ~/.claude.
+# A suite that defaults to the installed copy tests whatever the machine
+# happens to have: it passes on a developer box that already has the plugin
+# and fails outright on a fresh checkout, which is every CI runner. The three
+# newer suites here already resolve from ../scripts; these two did not, so
+# `tests/readme-counts.sh` -- which invokes each suite with no environment --
+# broke in CI and in the pre-commit hook for anyone without an install.
+#
+# The override still works, and CI still passes one explicitly.
+RECORD="${RECORD:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)/lastlight-review-record.sh}"
 # Resolve to an ABSOLUTE path up front. Every case below cd's into a throwaway
 # fixture repo before invoking $RECORD, so a relative path stops resolving and
 # bash exits 127 -- which expect() reads as a refusal, silently turning the two
