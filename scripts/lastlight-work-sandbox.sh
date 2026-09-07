@@ -161,13 +161,31 @@ work_root_component() {
 # built, since the list is a snapshot. It still turns "every sibling project is
 # readable" into "the ones that existed when the session started are not".
 home_siblings_denied() {
-  local keep entry name
+  local root=${1:-} keep dir next entry
   keep=$(work_root_component)
-  for entry in "$HOME"/* "$HOME"/.[!.]*; do
-    [[ -e $entry || -L $entry ]] || continue
-    name=${entry##*/}
-    [[ -n $keep && $name == "$keep" ]] && continue
-    printf '%s\n' "$entry"
+  dir=$HOME
+  while :; do
+    for entry in "$dir"/* "$dir"/.[!.]*; do
+      [[ -e $entry || -L $entry ]] || continue
+      # The work root's own tree, at the $HOME level only.
+      [[ $dir == "$HOME" && -n $keep && ${entry##*/} == "$keep" ]] && continue
+      # The repository, and the chain of directories leading down to it. Reads
+      # of the real repository are deliberately allowed: it holds the same code
+      # the session is working on, and this function denied it outright while
+      # claiming not to -- a repo at ~/code/myrepo fell inside the blanket rule
+      # for ~/code.
+      [[ -n $root && ($root == "$entry" || $root == "$entry"/*) ]] && continue
+      printf '%s\n' "$entry"
+    done
+
+    # Descend one level toward the repository, denying that level's other
+    # children in turn. A sibling project under the same parent stays denied;
+    # only the path to this repository is opened.
+    [[ -n $root && $root == "$dir"/* ]] || break
+    next=${root#"$dir"/}
+    next=$dir/${next%%/*}
+    [[ $next != "$root" ]] || break
+    dir=$next
   done
 }
 
@@ -232,7 +250,7 @@ work_settings_json() {
     --argjson deny "$(sandbox_denied_reads | jq -R . | jq -s .)" \
     --argjson secrets "$(edit_denied_paths | jq -R . | jq -s 'map("Edit(/" + . + ")", "Edit(/" + . + "/**)")')" \
     --argjson readdeny "$(edit_denied_paths | jq -R . | jq -s 'map("Read(/" + . + ")", "Read(/" + . + "/**)")')" \
-    --argjson siblings "$(home_siblings_denied | jq -R . | jq -s 'map("Read(/" + . + ")", "Read(/" + . + "/**)", "Edit(/" + . + ")", "Edit(/" + . + "/**)")')" \
+    --argjson siblings "$(home_siblings_denied "$root" | jq -R . | jq -s 'map("Read(/" + . + ")", "Read(/" + . + "/**)", "Edit(/" + . + ")", "Edit(/" + . + "/**)")')" \
     --arg readcanary "$(work_read_canary)" \
     --argjson net "$(work_allowed_domains | jq -R . | jq -s .)" \
     '{

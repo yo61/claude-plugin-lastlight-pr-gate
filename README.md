@@ -274,7 +274,7 @@ for t in tests/*.test.sh; do bash "$t"; done
 | `lastlight-review-record.test.sh` | 10 | the pass bar and the attestation binding |
 | `lastlight-review-run.test.sh` | 39 | flag parsing, the prompt, the defaults, and the tool allowlist |
 | `lastlight-sandbox.test.sh` | 83 | review isolation and the containment verdict |
-| `lastlight-work-sandbox.test.sh` | 107 | work isolation, policy spelling, landing |
+| `lastlight-work-sandbox.test.sh` | 109 | work isolation, policy spelling, landing |
 
 Counts are what each suite prints when you run it, not a count of lines that
 look like assertions — several derive their cases from the credential list, so

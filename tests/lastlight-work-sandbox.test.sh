@@ -350,10 +350,6 @@ echo "--- \$HOME's other trees are denied, one entry at a time ---"
 # A blanket Read(\$HOME/**) is not available: the workspace lives under \$HOME by
 # default and a deny beats an allow -- verified, an explicit allow on the
 # workspace did NOT reinstate it. Hence the enumeration.
-SIB=$(home_siblings_denied)
-
-ok "the enumeration is not empty on this machine" \
-  "$([[ $(wc -l <<< "$SIB") -gt 3 ]] && echo yes || echo no)" "yes"
 
 # Against a CONTROLLED $HOME, not this one. Asserting on whatever happens to be
 # on disk cannot see the two decisions that matter: `~/.lastlight` may not
@@ -384,21 +380,51 @@ ok "a work root outside \$HOME excludes nothing" \
 ok "...and one inside it names the top component" \
   "$(LASTLIGHT_WORK_ROOT=$HOME/scratch/wt bash -c 'source "$1" 2>/dev/null; work_root_component' _ "$WORK")" "scratch"
 
-POLICY=$(work_settings_json "$WORK_ROOT/probe/branch" /tmp/repo)
-ok "a sibling tree cannot be read by the tool" \
-  "$(jq -r --arg r "Read(/$HOME/code/**)" '.permissions.deny | index($r) != null' <<< "$POLICY")" "true"
-ok "...nor edited" \
-  "$(jq -r --arg r "Edit(/$HOME/code/**)" '.permissions.deny | index($r) != null' <<< "$POLICY")" "true"
+# Against a controlled $HOME again, and with a repo nested inside it the way
+# they usually are. Asserting on `$HOME/code` from the real machine only passes
+# where a `code` directory happens to exist -- it does not on a runner, and
+# `home_siblings_denied` emits only what is on disk.
+FAKE2=$(mktemp -d)
+mkdir -p "$FAKE2/.lastlight" "$FAKE2/code/myrepo" "$FAKE2/code/otherproject" "$FAKE2/docs"
+fake_policy() {
+  HOME="$FAKE2" LASTLIGHT_WORK_ROOT="$FAKE2/.lastlight/work" \
+    bash -c 'source "$1" 2>/dev/null; work_settings_json "$2" "$3"' \
+    _ "$WORK" "$FAKE2/.lastlight/work/slot/repo" "$FAKE2/code/myrepo"
+}
+POLICY=$(fake_policy)
+denied_rule() {
+  jq -r --arg r "$1" '.permissions.deny | index($r) != null' <<< "$POLICY"
+}
+
+ok "another project under the same parent is denied" \
+  "$(denied_rule "Read(/$FAKE2/code/otherproject/**)")" "true"
+ok "...and cannot be edited either" \
+  "$(denied_rule "Edit(/$FAKE2/code/otherproject/**)")" "true"
+ok "an unrelated tree is denied" \
+  "$(denied_rule "Read(/$FAKE2/docs/**)")" "true"
+
+# The repository itself, and the chain down to it, stay readable. Denying the
+# parent wholesale swept the repo in with it -- the function said in its own
+# comment that reads of the real repository are allowed while denying them for
+# every repo that lives under $HOME, which is the usual place for one.
+ok "the repository is NOT denied" \
+  "$(denied_rule "Read(/$FAKE2/code/myrepo/**)")" "false"
+ok "...nor its parent, which is the way in" \
+  "$(denied_rule "Read(/$FAKE2/code/**)")" "false"
 ok "the work root's tree is NOT denied" \
-  "$(jq -r --arg r "Read(/$HOME/.lastlight/**)" '.permissions.deny | index($r) != null' <<< "$POLICY")" "false"
+  "$(denied_rule "Read(/$FAKE2/.lastlight/**)")" "false"
+rm -rf "$FAKE2"
 
 # The OS layer is deliberately NOT enumerated: spawned processes read $HOME
 # during ordinary work -- package manager and compiler caches -- and denying
 # those breaks the build the session exists to run.
-ok "the OS layer still names only the credential stores" \
-  "$(jq -r --arg h "$HOME/code" '.sandbox.filesystem.denyRead | index($h) != null' <<< "$POLICY")" "false"
-ok "...and still names those" \
-  "$(jq -r --arg h "$HOME/.ssh" '.sandbox.filesystem.denyRead | index($h) != null' <<< "$POLICY")" "true"
+# $FAKE2, not $HOME: the policy under test was built with HOME pointed there,
+# so asserting against the real one compares against a path the policy never
+# saw.
+ok "the OS layer does not enumerate siblings" \
+  "$(jq -r --arg h "$FAKE2/code" '.sandbox.filesystem.denyRead | index($h) != null' <<< "$POLICY")" "false"
+ok "...but still names the credential stores" \
+  "$(jq -r --arg h "$FAKE2/.ssh" '.sandbox.filesystem.denyRead | index($h) != null' <<< "$POLICY")" "true"
 
 # Overlapping sources must not produce the same rule twice.
 ok "rules are not repeated" \
