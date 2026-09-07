@@ -272,7 +272,7 @@ for t in tests/*.test.sh; do bash "$t"; done
 |---|---|---|
 | `lastlight-review-gate.test.sh` | 44 | what is gated, what is allowed through |
 | `lastlight-review-record.test.sh` | 10 | the pass bar and the attestation binding |
-| `lastlight-review-run.test.sh` | 39 | flag parsing, the prompt, the defaults, and the tool allowlist |
+| `lastlight-review-run.test.sh` | 42 | flag parsing, the prompt, the defaults, and the tool allowlist |
 | `lastlight-sandbox.test.sh` | 83 | review isolation and the containment verdict |
 | `lastlight-work-sandbox.test.sh` | 109 | work isolation, policy spelling, landing |
 

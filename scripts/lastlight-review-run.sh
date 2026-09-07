@@ -129,11 +129,7 @@ main() {
   # tracked and untracked alike.
   if [[ $WORKING_TREE -eq 1 ]]; then
     base=HEAD
-    {
-      git diff HEAD
-      git ls-files --others --exclude-standard -z \
-        | xargs -0 -I{} git diff --no-index -- /dev/null {} 2> /dev/null || true
-    } > "$OUT_DIR/diff.patch"
+    working_tree_diff > "$OUT_DIR/diff.patch"
   else
     git diff "$base"...HEAD > "$OUT_DIR/diff.patch"
   fi
@@ -272,6 +268,28 @@ main() {
 # A function so the decision can be asserted on. main() reaches the network and
 # starts a review, so nothing in the suite calls it, and this branch shipped
 # with no coverage.
+# Everything not yet committed, tracked and untracked alike, on stdout.
+#
+# `.lastlight/` is excluded from BOTH halves, and the untracked half is why.
+# The caller redirects this into .lastlight/pr-review/diff.patch, and a redirect
+# creates its target before the command runs -- so by the time
+# `git ls-files --others` executes, the output file already exists as an
+# untracked file and lists itself. The diff then embeds a copy of whatever has
+# been written to it so far.
+#
+# It does not show up on a machine whose global gitignore happens to cover
+# `.lastlight/`, which is why it survived here: `--exclude-standard` reads that
+# file, so the bug is invisible to the author and present for everyone else --
+# including the sandboxed reviewer, which cannot read $HOME at all.
+#
+# The same `:(exclude)` pathspec as the dirty-tree check above, for the same
+# reason: the tool's own workspace is not part of the change under review.
+working_tree_diff() {
+  git diff HEAD -- ':(exclude).lastlight/'
+  git ls-files --others --exclude-standard -z -- ':(exclude).lastlight/' \
+    | xargs -0 -I{} git diff --no-index -- /dev/null {} 2> /dev/null || true
+}
+
 base_needed() {
   local given=$1 working_tree=$2
   [[ -z $given && $working_tree -eq 0 ]]

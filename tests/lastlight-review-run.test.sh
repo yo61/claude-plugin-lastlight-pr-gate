@@ -181,5 +181,44 @@ ok "working-tree, no base given" "$(needed '' 1)" "no"
 ok "committed, no base given" "$(needed '' 0)" "yes"
 ok "a base given is never re-resolved" "$(needed origin/main 0)" "no"
 ok "...not in working-tree mode either" "$(needed origin/main 1)" "no"
+
+echo "--- working_tree_diff: the patch must not contain itself ---"
+# The caller redirects this into .lastlight/pr-review/diff.patch, and a
+# redirect creates its target before the command runs -- so the untracked
+# listing finds the output file and the diff embeds a copy of itself.
+#
+# HOME is pointed at an empty directory FOR THE GIT CALLS, deliberately.
+# `--exclude-standard` reads the global gitignore, and this machine's covers
+# `.lastlight/`, so the bug is invisible here and present for everyone else.
+# A test that inherits that config would pass without exercising anything.
+WTD_HOME=$(mktemp -d)
+WTD_REPO=$(mktemp -d)/repo
+mkdir -p "$WTD_REPO/.lastlight/pr-review"
+git -C "$WTD_REPO" init -q -b main
+git -C "$WTD_REPO" config user.email p@example.com
+git -C "$WTD_REPO" config user.name p
+printf 'one\n' > "$WTD_REPO/f.txt"
+git -C "$WTD_REPO" add f.txt
+git -C "$WTD_REPO" commit -qm init
+printf 'two\n' > "$WTD_REPO/f.txt"   # tracked, modified
+printf 'new\n' > "$WTD_REPO/new.txt" # untracked
+
+wtd_patch() {
+  (
+    cd "$WTD_REPO" && HOME=$WTD_HOME working_tree_diff > .lastlight/pr-review/diff.patch
+    cat .lastlight/pr-review/diff.patch
+  )
+}
+WTD=$(wtd_patch)
+
+ok "the patch does not include itself" \
+  "$(printf '%s' "$WTD" | grep -c 'diff\.patch' || true)" "0"
+# ...and it still carries what it is for. A patch that excluded everything
+# would pass the assertion above and be useless.
+ok "a tracked change is in it" \
+  "$([[ $WTD == *f.txt* ]] && echo yes || echo no)" "yes"
+ok "an untracked file is in it" \
+  "$([[ $WTD == *new.txt* ]] && echo yes || echo no)" "yes"
+rm -rf "$WTD_HOME" "$(dirname "$WTD_REPO")"
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]
