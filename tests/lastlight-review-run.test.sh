@@ -168,5 +168,18 @@ ok "an override is honoured verbatim" \
 ok "...and REPLACES the default rather than extending it" \
   "$(tools_for '' 'Read,WebFetch' | grep -cx 'Glob')" "0"
 
+echo "--- base_needed: --working-tree must not require a remote ---"
+needed() { base_needed "$1" "$2" && echo yes || echo no; }
+
+# The bug: the base was resolved before the flag was read, so a repository
+# with no reachable origin/main died on the merge base before --working-tree
+# was honoured -- the usage the README documents with no base ref given.
+#
+# main() reaches the network and starts a review, so no case calls it; the
+# decision is a function for exactly that reason.
+ok "working-tree, no base given" "$(needed '' 1)" "no"
+ok "committed, no base given" "$(needed '' 0)" "yes"
+ok "a base given is never re-resolved" "$(needed origin/main 0)" "no"
+ok "...not in working-tree mode either" "$(needed origin/main 1)" "no"
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]

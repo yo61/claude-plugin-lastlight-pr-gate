@@ -100,7 +100,7 @@ main() {
   sha=$(git rev-parse HEAD)
 
   base=${1:-}
-  if [[ -z $base ]]; then
+  if base_needed "$base" "$WORKING_TREE"; then
     local default_ref
     default_ref=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2> /dev/null || true)
     [[ -n $default_ref ]] || default_ref=origin/main
@@ -260,6 +260,23 @@ main() {
 # there is no sandbox, and inline in main() it could not be asserted on.
 #
 # Takes the workspace path, empty when unsandboxed.
+# Whether a base ref has to be resolved from the remote at all.
+#
+# NOT in working-tree mode, which discards the value for HEAD immediately
+# after. Resolving first meant a repository with no reachable origin/main or
+# origin/master could not use `--working-tree`: it died on the merge base
+# before the flag was ever honoured -- and that is the usage the README
+# documents, with no base ref given. A fresh `git init` with no remote is the
+# ordinary case for it.
+#
+# A function so the decision can be asserted on. main() reaches the network and
+# starts a review, so nothing in the suite calls it, and this branch shipped
+# with no coverage.
+base_needed() {
+  local given=$1 working_tree=$2
+  [[ -z $given && $working_tree -eq 0 ]]
+}
+
 review_tools() {
   local workspace=${1:-}
 
