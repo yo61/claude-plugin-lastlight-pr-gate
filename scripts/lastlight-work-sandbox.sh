@@ -118,6 +118,13 @@ slot_for() {
 # that can edit ~/.claude/hooks or ~/.claude/settings.json can switch off the
 # guard that is watching it.
 #
+# This list feeds the OS layer as well as the tool layer. It fed only the tool
+# layer before, so `~/.claude` was unreadable to Read and Edit and wide open to
+# any spawned process -- and the work sandbox auto-approves Bash, so an
+# ordinary `npm install` running a poisoned postinstall script could read the
+# hooks watching it. The credentials file alone was the only thing the OS layer
+# named.
+#
 # Each path yields rules for the file form and the directory form, for Edit and
 # for Read alike. Which spelling a path needs is not knowable here -- some do
 # not exist yet -- and a rule that matches nothing costs nothing.
@@ -127,19 +134,6 @@ slot_for() {
 edit_denied_paths() {
   sandbox_denied_reads
   printf '%s\n' "$HOME/.claude"
-}
-
-# The top-level name under $HOME that the work root lives in, empty when the
-# work root is outside $HOME entirely.
-work_root_component() {
-  local rest
-  case $WORK_ROOT in
-    "$HOME"/*)
-      rest=${WORK_ROOT#"$HOME"/}
-      printf '%s' "${rest%%/*}"
-      ;;
-    *) ;; # outside $HOME: nothing to keep out of the enumeration
-  esac
 }
 
 # Everything else under $HOME, one entry at a time.
@@ -160,33 +154,47 @@ work_root_component() {
 # What this does NOT cover: an entry created in $HOME after the policy is
 # built, since the list is a snapshot. It still turns "every sibling project is
 # readable" into "the ones that existed when the session started are not".
-home_siblings_denied() {
-  local root=${1:-} keep dir next entry
-  keep=$(work_root_component)
-  dir=$HOME
-  while :; do
-    for entry in "$dir"/* "$dir"/.[!.]*; do
-      [[ -e $entry || -L $entry ]] || continue
-      # The work root's own tree, at the $HOME level only.
-      [[ $dir == "$HOME" && -n $keep && ${entry##*/} == "$keep" ]] && continue
-      # The repository, and the chain of directories leading down to it. Reads
-      # of the real repository are deliberately allowed: it holds the same code
-      # the session is working on, and this function denied it outright while
-      # claiming not to -- a repo at ~/code/myrepo fell inside the blanket rule
-      # for ~/code.
-      [[ -n $root && ($root == "$entry" || $root == "$entry"/*) ]] && continue
-      printf '%s\n' "$entry"
+# Everything under $HOME except the chains leading to the paths kept.
+#
+# Walks down: at each level, the children that do not lead to a kept path are
+# denied, and the ones that do are descended into. A kept path itself is left
+# alone entirely.
+#
+# Exempting the work root's whole top-level component was too blunt. That is a
+# SHARED tree -- `list` exists because several workspaces are open at once --
+# so exempting `~/.lastlight` left every other repository's and branch's clone
+# readable and editable from this session. Only this session's own workspace is
+# kept now.
+_deny_below() {
+  local dir=$1
+  shift
+  local keeps=("$@") entry k on_path is_keep
+  for entry in "$dir"/* "$dir"/.[!.]*; do
+    [[ -e $entry || -L $entry ]] || continue
+    on_path=0
+    is_keep=0
+    for k in "${keeps[@]}"; do
+      [[ -n $k ]] || continue
+      [[ $k == "$entry" ]] && is_keep=1
+      [[ $k == "$entry" || $k == "$entry"/* ]] && on_path=1
     done
-
-    # Descend one level toward the repository, denying that level's other
-    # children in turn. A sibling project under the same parent stays denied;
-    # only the path to this repository is opened.
-    [[ -n $root && $root == "$dir"/* ]] || break
-    next=${root#"$dir"/}
-    next=$dir/${next%%/*}
-    [[ $next != "$root" ]] || break
-    dir=$next
+    if [[ $is_keep -eq 1 ]]; then
+      continue
+    elif [[ $on_path -eq 1 ]]; then
+      _deny_below "$entry" "${keeps[@]}"
+    else
+      printf '%s\n' "$entry"
+    fi
   done
+}
+
+# The repository and this session's workspace are the kept paths: the repo
+# because it holds the same code the session is working on, the workspace
+# because a deny beats an allow and it would otherwise lock the session out of
+# its own tree.
+home_siblings_denied() {
+  local root=${1:-} ws=${2:-}
+  _deny_below "$HOME" "$root" "$ws"
 }
 
 # A file the Read tool must not be able to reach, and the token proving it.
@@ -196,8 +204,14 @@ home_siblings_denied() {
 # runs after that -- a canary created later would not be in the list, and the
 # probe would report a refusal the policy never made.
 #
-# A fixed name, so the rule and the probe agree without passing paths around.
-# The per-run token lives in the CONTENTS, so a stale file left by a killed
+# PER-INVOCATION, because `list` exists precisely because several workspaces are
+# open at once. A fixed name let two concurrent `start` calls race on the same
+# file: one probe's cleanup can remove what another just wrote, moments before
+# that one checks for it, and a policy that really did leak could be reported as
+# contained on timing alone. The policy rule and the probe agree because both
+# call this in the same shell, so `$$` matches.
+#
+# The token in the CONTENTS is still per-run, so a stale file from a killed
 # probe cannot be mistaken for this run's evidence.
 # The tools the probe is granted. A function so it can be asserted on: a tool
 # the probe is not given is a tool the policy is never tested against, and the
@@ -209,7 +223,7 @@ work_probe_tools() {
 }
 
 work_read_canary() {
-  printf '%s/.lastlight-work-read-probe' "$HOME"
+  printf '%s/.lastlight-work-read-probe.%s' "$HOME" "$$"
 }
 
 # Whether a workspace sits inside a tree the policy denies editing.
@@ -247,10 +261,10 @@ work_settings_json() {
     --arg root "$root" \
     --arg tmp "$tmp" \
     --arg home "$HOME" \
-    --argjson deny "$(sandbox_denied_reads | jq -R . | jq -s .)" \
+    --argjson deny "$(edit_denied_paths | jq -R . | jq -s .)" \
     --argjson secrets "$(edit_denied_paths | jq -R . | jq -s 'map("Edit(/" + . + ")", "Edit(/" + . + "/**)")')" \
     --argjson readdeny "$(edit_denied_paths | jq -R . | jq -s 'map("Read(/" + . + ")", "Read(/" + . + "/**)")')" \
-    --argjson siblings "$(home_siblings_denied "$root" | jq -R . | jq -s 'map("Read(/" + . + ")", "Read(/" + . + "/**)", "Edit(/" + . + ")", "Edit(/" + . + "/**)")')" \
+    --argjson siblings "$(home_siblings_denied "$root" "$ws" | jq -R . | jq -s 'map("Read(/" + . + ")", "Read(/" + . + "/**)", "Edit(/" + . + ")", "Edit(/" + . + "/**)")')" \
     --arg readcanary "$(work_read_canary)" \
     --argjson net "$(work_allowed_domains | jq -R . | jq -s .)" \
     '{
@@ -340,9 +354,9 @@ work_verify() {
   local escaped_bash=0 escaped_edit=0 edit_worked=0
 
   outside=$(sandbox_escape_canary)
-  inside=$ws/.sandbox-selftest-report
-  edit_target=$ws/.sandbox-selftest-edit
-  repo_target=$root/.lastlight-selftest-write
+  inside=$ws/.sandbox-selftest-report.$$
+  edit_target=$ws/.sandbox-selftest-edit.$$
+  repo_target=$root/.lastlight-selftest-write.$$
   rm -f "$inside" "$edit_target" "$repo_target"
 
   # The READ half. The Bash escape tests the OS sandbox and the Write escape

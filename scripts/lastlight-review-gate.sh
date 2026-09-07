@@ -165,13 +165,18 @@ main() {
   # A write is an explicit mutating --method, or a field flag, which makes gh
   # use POST on its own.
   #
-  # Both attached and separated spellings: gh's flag parser takes `--method=POST`
-  # and `-XPOST` as readily as `-X POST`, and a rule that saw only the separated
-  # form let a real POST through -- a narrower version of this check shipped that
-  # way for an hour. Field flags likewise carry their value attached (`-ftitle=x`),
-  # so they are matched on the flag alone.
+  # Every spelling of the same request. gh's flag parser takes the value
+  # attached or separated, gh does not validate or normalise the method, and the
+  # shell has already collapsed repeated spaces before gh sees the argument. So
+  # `-XPOST`, `--method=POST`, `--method  post` and `-X delete` are all the same
+  # call, and each one this pattern missed was a write the gate let through.
+  # Matched case-insensitively for that reason; a lowercase `-x` is not a gh
+  # flag, so the only cost is refusing something that was never valid.
+  #
+  # Field flags carry their value attached too (`-ftitle=x`), so they are
+  # matched on the flag alone.
   if grep -Eq '(^|[;|&(])[[:space:]]*gh[[:space:]]+api[^;|&]*(/pulls|repos/[^[:space:]]*/pulls)' <<< "$cmd" \
-    && grep -Eq '(--method[=[:space:]]|-X[[:space:]]?)(POST|PATCH|PUT|DELETE)|(^|[[:space:]])(-[fF]|--field|--raw-field|--input)' <<< "$cmd"; then
+    && grep -Eqi '(--method|-X)[[:space:]]*=?[[:space:]]*(POST|PATCH|PUT|DELETE)|(^|[[:space:]])(-[fF]|--field|--raw-field|--input)' <<< "$cmd"; then
     opens=1
   fi
   if [[ $opens -eq 0 ]]; then

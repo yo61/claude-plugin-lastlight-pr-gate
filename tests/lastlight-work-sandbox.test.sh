@@ -358,27 +358,34 @@ echo "--- \$HOME's other trees are denied, one entry at a time ---"
 # credential list, so "dotfiles are enumerated" passes either way. Both were
 # verified to survive a mutation before this replaced them.
 FAKE=$(mktemp -d)
-mkdir -p "$FAKE/.lastlight" "$FAKE/code" "$FAKE/.hidden-sibling"
+MYWS=$FAKE/.lastlight/work/repoA-1111/main/repo
+OTHERWS=$FAKE/.lastlight/work/repoB-2222/main/repo
+mkdir -p "$MYWS" "$OTHERWS" "$FAKE/code" "$FAKE/.hidden-sibling"
 fake_siblings() {
   HOME="$FAKE" LASTLIGHT_WORK_ROOT="$FAKE/.lastlight/work" \
-    bash -c 'source "$1" 2>/dev/null; home_siblings_denied' _ "$WORK"
+    bash -c 'source "$1" 2>/dev/null; home_siblings_denied "" "$2"' _ "$WORK" "$MYWS"
 }
-ok "the work root's own tree is left out" \
-  "$(fake_siblings | grep -cx "$FAKE/.lastlight")" "0"
+ok "this session's own workspace is left out" \
+  "$(fake_siblings | grep -cx "$MYWS")" "0"
+# The work root is SHARED -- `list` exists because several workspaces are open
+# at once -- so exempting its whole top-level component left every other
+# repository's and branch's clone readable from this session.
+ok "another repository's workspace IS denied" \
+  "$(fake_siblings | grep -c "repoB-2222")" "1"
 ok "a visible sibling is enumerated" \
   "$(fake_siblings | grep -cx "$FAKE/code")" "1"
 ok "a HIDDEN sibling is enumerated too" \
   "$(fake_siblings | grep -cx "$FAKE/.hidden-sibling")" "1"
-rm -rf "$FAKE"
+# ...and the chain down to the kept workspace is not denied, or the session
+# could not reach its own tree.
+ok "the chain to the workspace is open" \
+  "$(fake_siblings | grep -cx "$FAKE/.lastlight")" "0"
 
-# A work root outside $HOME keeps nothing back. Sourced in a FRESH shell with
-# the environment set: WORK_ROOT is readonly here, so assigning it in a
-# subshell fails and the empty output matches the expectation for the wrong
-# reason -- the assertion passed while exercising nothing.
-ok "a work root outside \$HOME excludes nothing" \
-  "$(LASTLIGHT_WORK_ROOT=/tmp/elsewhere bash -c 'source "$1" 2>/dev/null; work_root_component' _ "$WORK")" ""
-ok "...and one inside it names the top component" \
-  "$(LASTLIGHT_WORK_ROOT=$HOME/scratch/wt bash -c 'source "$1" 2>/dev/null; work_root_component' _ "$WORK")" "scratch"
+# A workspace outside $HOME needs no exemption: nothing under $HOME leads to
+# it, so the enumeration simply never reaches it.
+ok "an outside workspace changes nothing under \$HOME" \
+  "$(HOME="$FAKE" bash -c 'source "$1" 2>/dev/null; home_siblings_denied "" /tmp/elsewhere/repo' _ "$WORK" | grep -cx "$FAKE/code")" "1"
+rm -rf "$FAKE"
 
 # Against a controlled $HOME again, and with a repo nested inside it the way
 # they usually are. Asserting on `$HOME/code` from the real machine only passes
@@ -425,6 +432,19 @@ ok "the OS layer does not enumerate siblings" \
   "$(jq -r --arg h "$FAKE2/code" '.sandbox.filesystem.denyRead | index($h) != null' <<< "$POLICY")" "false"
 ok "...but still names the credential stores" \
   "$(jq -r --arg h "$FAKE2/.ssh" '.sandbox.filesystem.denyRead | index($h) != null' <<< "$POLICY")" "true"
+
+# ~/.claude whole, at the OS layer too. It was on the tool layer only, so a
+# spawned process could read the hooks and settings watching it -- and this
+# sandbox auto-approves Bash, so an ordinary `npm install` running a poisoned
+# postinstall script was enough.
+ok "the OS layer denies ~/.claude whole" \
+  "$(jq -r --arg h "$FAKE2/.claude" '.sandbox.filesystem.denyRead | index($h) != null' <<< "$POLICY")" "true"
+
+# The probe canaries are per-invocation: `list` exists because several
+# workspaces are open at once, and a fixed name lets one session's cleanup
+# clear the file another session's probe just wrote, moments before it looks.
+ok "the read canary carries the pid" \
+  "$(work_read_canary | grep -cE '\.[0-9]+$')" "1"
 
 # Overlapping sources must not produce the same rule twice.
 ok "rules are not repeated" \

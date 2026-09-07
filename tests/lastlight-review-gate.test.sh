@@ -148,6 +148,16 @@ expect deny "gh api --input" 'gh api repos/o/r/pulls --input body.json'
 expect allow "gh api --method=GET" 'gh api --method=GET repos/o/r/pulls'
 expect allow "gh api -XGET" 'gh api -XGET repos/o/r/pulls/4'
 
+# gh does not validate or normalise the method value, and the shell has
+# already collapsed repeated spaces before gh sees the argument -- so these
+# are the same request as the forms above, spelled differently.
+expect deny "gh api --method<2 spaces>POST" 'gh api --method  POST repos/o/r/pulls'
+expect deny "gh api lowercase post" 'gh api --method post repos/o/r/pulls'
+expect deny "gh api -X lowercase" 'gh api -X delete repos/o/r/pulls/1'
+expect deny "gh api --method=patch" 'gh api --method=patch repos/o/r/pulls/1'
+# ...and a read stays a read however it is spaced or cased.
+expect allow "gh api lowercase get" 'gh api --method get repos/o/r/pulls'
+
 echo "--- never gated ---"
 expect allow "git status" 'git status'
 expect allow "git commit" 'git commit -m "feat: x"'
