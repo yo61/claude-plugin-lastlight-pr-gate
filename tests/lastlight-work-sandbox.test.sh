@@ -10,6 +10,8 @@
 # and a check that costs money per assertion is a check that stops being run.
 set -uo pipefail
 
+# shellcheck source=tests/lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 pass=0
 fail=0
 
@@ -205,7 +207,7 @@ ok "it carries that branch's work" "$(cat "$WS/file.txt")" "two"
 # the isolation exists to prevent.
 obj=$(find "$WS/.git/objects" -type f | head -1)
 ok "objects are NOT hardlinked to the source" \
-  "$(stat -f %l "$obj" 2> /dev/null || stat -c %h "$obj")" "1"
+  "$(link_count "$obj")" "1"
 
 WS2=$(slot_for "$REPO" feat/brand-new)/repo
 make_workspace "$REPO" feat/brand-new "$WS2"

@@ -22,6 +22,8 @@ SANDBOX="${SANDBOX:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)/las
 # green, because prek passes a relative path and CI an absolute one. Cheap
 # insurance against the third time.
 SANDBOX=$(cd "$(dirname "$SANDBOX")" && printf '%s/%s' "$PWD" "$(basename "$SANDBOX")")
+# shellcheck source=tests/lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 pass=0
 fail=0
 
@@ -104,11 +106,11 @@ ok "has its own .git" "$([[ -d "$WS/.git" ]] && echo yes || echo no)" "yes"
 # inode. Compare an object's link count -- 1 means it is not shared.
 obj=$(find "$WS/.git/objects" -type f -name '*' ! -path '*/info/*' ! -path '*/pack/*' | head -1)
 if [[ -n $obj ]]; then
-  ok "objects are NOT hardlinked to the source" "$(stat -f %l "$obj" 2> /dev/null || stat -c %h "$obj")" "1"
+  ok "objects are NOT hardlinked to the source" "$(link_count "$obj")" "1"
 else
   # A packed clone has no loose objects; assert the pack is unshared instead.
   pack=$(find "$WS/.git/objects/pack" -name '*.pack' | head -1)
-  ok "pack is NOT hardlinked to the source" "$(stat -f %l "$pack" 2> /dev/null || stat -c %h "$pack")" "1"
+  ok "pack is NOT hardlinked to the source" "$(link_count "$pack")" "1"
 fi
 
 echo "--- writing in the workspace cannot reach the source ---"
@@ -123,13 +125,15 @@ mkdir -p "$REPO/ignored" && echo junk > "$REPO/ignored/big.bin"
 git -C "$REPO" add .gitignore && git -C "$REPO" commit -qm "chore: ignore"
 
 WWS=$(cd "$REPO" && sandbox_make_working_workspace "$REPO")
-ok "uncommitted change applied" "$(rg -c modified "$WWS/f.txt" 2> /dev/null || echo 0)" "1"
+ok "uncommitted change applied" "$(count_matching modified "$WWS/f.txt")" "1"
 ok "untracked file copied" "$([[ -f $WWS/new.txt ]] && echo yes || echo no)" "yes"
 ok "ignored tree NOT copied" "$([[ -d $WWS/ignored ]] && echo copied || echo excluded)" "excluded"
 ok "still an independent .git" "$([[ -d $WWS/.git ]] && echo yes || echo no)" "yes"
 # The whole point of the mode: a plain clone would have none of the above.
 PLAIN=$(cd "$REPO" && sandbox_make_workspace "$REPO" "$(git -C "$REPO" rev-parse HEAD)")
-ok "a plain clone lacks it" "$(rg -c modified "$PLAIN/f.txt" 2> /dev/null || echo 0)" "0"
+# Expecting 0 is the dangerous shape: a missing `rg` also produces 0, so this
+# passed on a runner without it while testing nothing.
+ok "a plain clone lacks it" "$(count_matching modified "$PLAIN/f.txt")" "0"
 
 echo "--- sandbox_probe_verdict: inconclusive fails closed ---"
 # Three outcomes: a proven refusal, a write that got out, and a probe that
