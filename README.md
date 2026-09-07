@@ -128,7 +128,7 @@ The review already runs on a disposable copy under an OS sandbox. The work that
 so a bad edit, a stray `rm`, or a command from a poisoned dependency landed on
 the only copy there was.
 
-`start` clones the branch into `~/.lastlight/work/<repo>-<digest>/<branch>` (override with
+`start` clones the branch into `~/.lastlight/work/<repo>-<digest>/<branch>/repo` (override with
 `LASTLIGHT_WORK_ROOT`), writes a policy scoped to that clone, proves the policy
 holds, and opens a session there. A clone rather than a worktree: a worktree
 keeps its git dir *inside* the real repository, so confining writes to the
