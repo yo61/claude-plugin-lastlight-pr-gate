@@ -164,8 +164,14 @@ main() {
   # including reading a review's own comments on the PR it had just blocked.
   # A write is an explicit mutating --method, or a field flag, which makes gh
   # use POST on its own.
+  #
+  # Both attached and separated spellings: gh's flag parser takes `--method=POST`
+  # and `-XPOST` as readily as `-X POST`, and a rule that saw only the separated
+  # form let a real POST through -- a narrower version of this check shipped that
+  # way for an hour. Field flags likewise carry their value attached (`-ftitle=x`),
+  # so they are matched on the flag alone.
   if grep -Eq '(^|[;|&(])[[:space:]]*gh[[:space:]]+api[^;|&]*(/pulls|repos/[^[:space:]]*/pulls)' <<< "$cmd" \
-    && grep -Eq '(--method|-X)[[:space:]]+(POST|PATCH|PUT|DELETE)|(^|[[:space:]])(-f|-F|--field|--raw-field|--input)([[:space:]]|=)' <<< "$cmd"; then
+    && grep -Eq '(--method[=[:space:]]|-X[[:space:]]?)(POST|PATCH|PUT|DELETE)|(^|[[:space:]])(-[fF]|--field|--raw-field|--input)' <<< "$cmd"; then
     opens=1
   fi
   if [[ $opens -eq 0 ]]; then

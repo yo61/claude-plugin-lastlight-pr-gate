@@ -132,6 +132,22 @@ expect deny "gh api --method POST" 'gh api --method POST repos/o/r/pulls -f titl
 expect deny "gh api PATCH" 'gh api -X PATCH repos/o/r/pulls/4 -f state=open'
 expect deny "gh api with a field implies POST" 'gh api repos/o/r/pulls --field title=x'
 
+# gh's flag parser takes the value attached as well as separated, and the
+# narrowed rule only recognised the separated form -- so `--method=POST` and
+# `-XPOST` walked straight through a gate that had caught them before it was
+# narrowed. Both issue a real POST.
+expect deny "gh api --method=POST" 'gh api --method=POST repos/o/r/pulls'
+expect deny "gh api -XPOST" 'gh api -XPOST repos/o/r/pulls'
+expect deny "gh api --method=DELETE" 'gh api --method=DELETE repos/o/r/pulls/1'
+expect deny "gh api -XPATCH" 'gh api -XPATCH repos/o/r/pulls/1'
+# Field flags take their value attached too.
+expect deny "gh api -ftitle=x" 'gh api repos/o/r/pulls -ftitle=x'
+expect deny "gh api --field=title=x" 'gh api repos/o/r/pulls --field=title=x'
+expect deny "gh api --input" 'gh api repos/o/r/pulls --input body.json'
+# ...and an attached GET is still a read.
+expect allow "gh api --method=GET" 'gh api --method=GET repos/o/r/pulls'
+expect allow "gh api -XGET" 'gh api -XGET repos/o/r/pulls/4'
+
 echo "--- never gated ---"
 expect allow "git status" 'git status'
 expect allow "git commit" 'git commit -m "feat: x"'
