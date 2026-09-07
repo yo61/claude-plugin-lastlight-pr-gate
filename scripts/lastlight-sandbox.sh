@@ -302,6 +302,13 @@ sandbox_supported() {
 # silently twice here -- once on the doubled-slash spelling, once when the two
 # halves of the policy drifted apart -- and neither break would have moved the
 # escape canary.
+# The tools the probe is granted, as a function so it can be asserted on. A
+# tool the probe does not have is a policy the probe cannot test: without Read
+# it reported "refused" even with the Read rules stripped entirely.
+sandbox_probe_tools() {
+  printf 'Bash Read'
+}
+
 sandbox_read_canary() {
   printf '%s/.lastlight-read-probe.%s' "$HOME" "$$"
 }
@@ -434,8 +441,13 @@ printf ' read=%s' '<the first line, or REFUSED>' >> '${inside}'"
   # probe declared containment. That is the failure this probe exists to catch,
   # reproduced in the probe itself. Granting the tool is what makes the policy,
   # rather than the tool list, the thing under test.
+  # An ARRAY, because `--allowed-tools` takes one argument per tool: a quoted
+  # command substitution passes "Bash Read" as a single tool name that matches
+  # nothing, and an unquoted one is a word-splitting bug everywhere else.
+  local -a probe_tools
+  read -r -a probe_tools <<< "$(sandbox_probe_tools)"
   timeout 120 claude -p "$prompt" \
-    --settings "$settings" --allowed-tools Bash Read --model haiku \
+    --settings "$settings" --allowed-tools "${probe_tools[@]}" --model haiku \
     < /dev/null > /dev/null 2>&1 || true
 
   report=$(cat "$inside" 2> /dev/null || true)

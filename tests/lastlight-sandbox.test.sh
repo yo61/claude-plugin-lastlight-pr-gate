@@ -298,5 +298,13 @@ ok "an escaped write still reports 1" "$(
   sandbox_probe_verdict 1 'ran rc=1 read=REFUSED' "$TOK"
   printf %s $?
 )" "1"
+
+# A tool the probe is not granted is a policy the probe cannot test: it then
+# answers "refused" whatever the rules say, and reports containment. That has
+# happened twice here, once for Write and once for Read.
+ok "the probe is granted Read" \
+  "$(sandbox_probe_tools | grep -c Read)" "1"
+ok "...and the full expected set" \
+  "$(sandbox_probe_tools)" "Bash Read"
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]

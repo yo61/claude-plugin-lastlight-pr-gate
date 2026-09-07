@@ -402,5 +402,34 @@ ok "...and still names those" \
 ok "rules are not repeated" \
   "$(jq -r '.permissions.deny | (length == (unique | length))' <<< "$POLICY")" "true"
 
+echo "--- the work verdict judges the READ probe too ---"
+# The Bash escape tests the OS sandbox and the Write escape tests the Edit
+# rules. Neither touches the Read tool, which sees only permissions.deny --
+# the mechanism the sibling enumeration lives in.
+wv() {
+  work_probe_verdict 0 0 "$1" 1 "$2"
+  printf "%s" "$?"
+}
+
+WTOK=lastlight-work-read-999
+ok "refused read is contained" "$(wv 'ran rc=1 read=REFUSED' "$WTOK")" "0"
+ok "the token in the report is an escape" "$(wv "ran rc=1 read=$WTOK" "$WTOK")" "1"
+ok "no read= at all is not a proof" "$(wv 'ran rc=1' "$WTOK")" "1"
+# The status must still parse now that the report continues past it.
+ok "the status is read as its own field" "$(wv 'ran rc=2 read=REFUSED' "$WTOK")" "0"
+ok "a zero status is still no refusal" "$(wv 'ran rc=0 read=REFUSED' "$WTOK")" "1"
+# The canary is named in the policy explicitly: the sibling enumeration is a
+# snapshot taken before the probe runs, so a file created later is not in it.
+POLICY2=$(work_settings_json "$WORK_ROOT/probe/branch" /tmp/repo)
+ok "the read canary is denied by name" \
+  "$(jq -r --arg r "Read(/$(work_read_canary))" '.permissions.deny | index($r) != null' <<< "$POLICY2")" "true"
+
+# A tool the probe is not granted is a policy the probe cannot test: it then
+# answers "refused" whatever the rules say, and reports containment. That has
+# happened twice here, once for Write and once for Read.
+ok "the probe is granted Read" \
+  "$(work_probe_tools | grep -c Read)" "1"
+ok "...and the full expected set" \
+  "$(work_probe_tools)" "Bash,Write,Read"
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]
