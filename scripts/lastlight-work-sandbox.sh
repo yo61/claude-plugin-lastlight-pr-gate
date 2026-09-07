@@ -129,6 +129,48 @@ edit_denied_paths() {
   printf '%s\n' "$HOME/.claude"
 }
 
+# The top-level name under $HOME that the work root lives in, empty when the
+# work root is outside $HOME entirely.
+work_root_component() {
+  local rest
+  case $WORK_ROOT in
+    "$HOME"/*)
+      rest=${WORK_ROOT#"$HOME"/}
+      printf '%s' "${rest%%/*}"
+      ;;
+    *) ;; # outside $HOME: nothing to keep out of the enumeration
+  esac
+}
+
+# Everything else under $HOME, one entry at a time.
+#
+# A blanket Read($HOME/**) is not usable here. The workspace lives under $HOME
+# by default and a DENY BEATS AN ALLOW -- verified directly: with $HOME denied
+# and an explicit allow on the workspace, a file inside the workspace was still
+# refused. So the boundary is drawn by naming $HOME's children and leaving out
+# the one the workspace sits in.
+#
+# TOOL rules only, deliberately. The OS layer keeps the credential list,
+# because spawned processes legitimately read $HOME during ordinary work --
+# ~/.cargo, ~/.npm, ~/.gradle, compiler and package-manager caches. Denying
+# those breaks the build the session exists to run. The Read TOOL has no such
+# need: what it reaches for outside the workspace is a sibling project, a shell
+# history, another session's transcript.
+#
+# What this does NOT cover: an entry created in $HOME after the policy is
+# built, since the list is a snapshot. It still turns "every sibling project is
+# readable" into "the ones that existed when the session started are not".
+home_siblings_denied() {
+  local keep entry name
+  keep=$(work_root_component)
+  for entry in "$HOME"/* "$HOME"/.[!.]*; do
+    [[ -e $entry || -L $entry ]] || continue
+    name=${entry##*/}
+    [[ -n $keep && $name == "$keep" ]] && continue
+    printf '%s\n' "$entry"
+  done
+}
+
 # Whether a workspace sits inside a tree the policy denies editing.
 #
 # Changing the default was not enough on its own: any LASTLIGHT_WORK_ROOT can
@@ -167,6 +209,7 @@ work_settings_json() {
     --argjson deny "$(sandbox_denied_reads | jq -R . | jq -s .)" \
     --argjson secrets "$(edit_denied_paths | jq -R . | jq -s 'map("Edit(/" + . + ")", "Edit(/" + . + "/**)")')" \
     --argjson readdeny "$(edit_denied_paths | jq -R . | jq -s 'map("Read(/" + . + ")", "Read(/" + . + "/**)")')" \
+    --argjson siblings "$(home_siblings_denied | jq -R . | jq -s 'map("Read(/" + . + ")", "Read(/" + . + "/**)", "Edit(/" + . + ")", "Edit(/" + . + "/**)")')" \
     --argjson net "$(work_allowed_domains | jq -R . | jq -s .)" \
     '{
       sandbox: {
@@ -178,7 +221,11 @@ work_settings_json() {
       },
       permissions: {
         allow: ["Edit(/\($ws)/**)"],
-        deny: (["Edit(/\($root)/**)"] + $secrets + $readdeny)
+        # `unique` because the lists overlap by construction: the credential
+        # stores are themselves children of $HOME, so they arrive from both the
+        # named list and the enumeration. A repeated rule is harmless to the
+        # CLI but makes the policy unreadable and its assertions ambiguous.
+        deny: ((["Edit(/\($root)/**)"] + $secrets + $readdeny + $siblings) | unique)
       }
     }'
 }

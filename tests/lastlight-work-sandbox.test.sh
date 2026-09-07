@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2154  # WORK_ROOT is assigned by the script this suite
+# sources, and asserting on the policy it produces is the point.
+#
 # Test suite for lastlight-work-sandbox.sh — confining the work, not just the
 # review.
 #
@@ -335,6 +338,69 @@ ok "a dirty repository refuses to land" "$rc" "1"
 ok "...and says to commit or stash" "$(grep -c 'Commit or stash' <<< "$out")" "1"
 git -C "$REPO" checkout --quiet -- file.txt
 git -C "$REPO" checkout --quiet main
+
+echo "--- \$HOME's other trees are denied, one entry at a time ---"
+# The named list covers credential stores. It said nothing about a sibling
+# project, a shell history or another session's transcript -- all readable by
+# the Read tool, and a work session can write what it reads into a tracked file
+# that `land` then fast-forwards into the real repository.
+#
+# A blanket Read(\$HOME/**) is not available: the workspace lives under \$HOME by
+# default and a deny beats an allow -- verified, an explicit allow on the
+# workspace did NOT reinstate it. Hence the enumeration.
+SIB=$(home_siblings_denied)
+
+ok "the enumeration is not empty on this machine" \
+  "$([[ $(wc -l <<< "$SIB") -gt 3 ]] && echo yes || echo no)" "yes"
+
+# Against a CONTROLLED $HOME, not this one. Asserting on whatever happens to be
+# on disk cannot see the two decisions that matter: `~/.lastlight` may not
+# exist yet, so "the work root is excluded" passes whether or not the code
+# excludes it, and every hidden entry that does exist is also in the named
+# credential list, so "dotfiles are enumerated" passes either way. Both were
+# verified to survive a mutation before this replaced them.
+FAKE=$(mktemp -d)
+mkdir -p "$FAKE/.lastlight" "$FAKE/code" "$FAKE/.hidden-sibling"
+fake_siblings() {
+  HOME="$FAKE" LASTLIGHT_WORK_ROOT="$FAKE/.lastlight/work" \
+    bash -c 'source "$1" 2>/dev/null; home_siblings_denied' _ "$WORK"
+}
+ok "the work root's own tree is left out" \
+  "$(fake_siblings | grep -cx "$FAKE/.lastlight")" "0"
+ok "a visible sibling is enumerated" \
+  "$(fake_siblings | grep -cx "$FAKE/code")" "1"
+ok "a HIDDEN sibling is enumerated too" \
+  "$(fake_siblings | grep -cx "$FAKE/.hidden-sibling")" "1"
+rm -rf "$FAKE"
+
+# A work root outside $HOME keeps nothing back. Sourced in a FRESH shell with
+# the environment set: WORK_ROOT is readonly here, so assigning it in a
+# subshell fails and the empty output matches the expectation for the wrong
+# reason -- the assertion passed while exercising nothing.
+ok "a work root outside \$HOME excludes nothing" \
+  "$(LASTLIGHT_WORK_ROOT=/tmp/elsewhere bash -c 'source "$1" 2>/dev/null; work_root_component' _ "$WORK")" ""
+ok "...and one inside it names the top component" \
+  "$(LASTLIGHT_WORK_ROOT=$HOME/scratch/wt bash -c 'source "$1" 2>/dev/null; work_root_component' _ "$WORK")" "scratch"
+
+POLICY=$(work_settings_json "$WORK_ROOT/probe/branch" /tmp/repo)
+ok "a sibling tree cannot be read by the tool" \
+  "$(jq -r --arg r "Read(/$HOME/code/**)" '.permissions.deny | index($r) != null' <<< "$POLICY")" "true"
+ok "...nor edited" \
+  "$(jq -r --arg r "Edit(/$HOME/code/**)" '.permissions.deny | index($r) != null' <<< "$POLICY")" "true"
+ok "the work root's tree is NOT denied" \
+  "$(jq -r --arg r "Read(/$HOME/.lastlight/**)" '.permissions.deny | index($r) != null' <<< "$POLICY")" "false"
+
+# The OS layer is deliberately NOT enumerated: spawned processes read $HOME
+# during ordinary work -- package manager and compiler caches -- and denying
+# those breaks the build the session exists to run.
+ok "the OS layer still names only the credential stores" \
+  "$(jq -r --arg h "$HOME/code" '.sandbox.filesystem.denyRead | index($h) != null' <<< "$POLICY")" "false"
+ok "...and still names those" \
+  "$(jq -r --arg h "$HOME/.ssh" '.sandbox.filesystem.denyRead | index($h) != null' <<< "$POLICY")" "true"
+
+# Overlapping sources must not produce the same rule twice.
+ok "rules are not repeated" \
+  "$(jq -r '.permissions.deny | (length == (unique | length))' <<< "$POLICY")" "true"
 
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]
