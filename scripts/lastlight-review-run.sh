@@ -56,8 +56,9 @@ readonly TIMEOUT="${LASTLIGHT_REVIEW_TIMEOUT:-900}"
 # string turns `Bash(git diff:*)` into two malformed rules that the CLI ignores
 # with a warning -- leaving the reviewer unable to run git at all.
 # NOTE the absence of a bare `Write`: that would be an unscoped allow and would
-# silently defeat the `Edit(<findings.json>)` rule appended in main(). Writes
-# must stay confined to the one file the contract requires.
+# silently defeat the path-scoped rules `review_tools` appends. Writes must stay
+# confined to the one file the contract requires -- which is why the rules there
+# name that path, and why both `Edit` and `Write` are needed for it.
 readonly DEFAULT_TOOLS=(
   Read Grep Glob
   'Bash(git diff:*)' 'Bash(git log:*)' 'Bash(git show:*)'
@@ -188,30 +189,8 @@ main() {
     printf '  The reviewed diff runs with your privileges; findings rest on reading, not execution.\n' >&2
   fi
 
-  local -a tools=("${DEFAULT_TOOLS[@]}")
-  if [[ -n ${LASTLIGHT_REVIEW_TOOLS:-} ]]; then
-    IFS=',' read -r -a tools <<< "$LASTLIGHT_REVIEW_TOOLS"
-  fi
-  # Sandboxed, the tool allowlist stops being the security boundary -- the
-  # sandbox is -- so the reviewer gets Bash and can run things. Unsandboxed it
-  # stays the narrow read-only list, because then it IS the only boundary.
-  #
-  # An explicit LASTLIGHT_REVIEW_TOOLS still wins. Widening happened
-  # unconditionally when sandboxed, which is the default on any machine with a
-  # sandbox available -- so the documented override was discarded in the common
-  # case, without a word, including when it was set to NARROW the reviewer.
-  if [[ -n $workspace && -z ${LASTLIGHT_REVIEW_TOOLS:-} ]]; then
-    tools=(Read Grep Glob Bash)
-  fi
-  # The ONE write the contract needs, scoped to exactly that path. Appended
-  # after any override so widening the tool list cannot accidentally drop the
-  # reviewer's ability to record its own result.
-  #
-  # RELATIVE, and main() has already cd'd to $root. A bare absolute path does
-  # NOT match (verified: the reviewer was then unable to write its own findings,
-  # which would have failed every run closed); the absolute form needs a `//`
-  # prefix. The relative form sidesteps that entirely.
-  tools+=("Edit(${OUT_DIR}/findings.json)")
+  review_tools "$workspace"
+  local -a tools=("${REVIEW_TOOLS[@]}")
 
   printf 'Reviewing %s against %s\n  model: %s (independent session)\n' \
     "${sha:0:12}" "${base:0:12}" "$MODEL" >&2
@@ -274,6 +253,52 @@ main() {
     "$(jq -r '.event // "?"' "$OUT_DIR/findings.json")" \
     "$(jq -r '(.findings // []) | length' "$OUT_DIR/findings.json")" >&2
   printf 'Next: %s/lastlight-review-record.sh\n' "$SELF_DIR" >&2
+}
+
+# The reviewer's tool allowlist, in REVIEW_TOOLS. A function because it is the
+# only thing standing between the reviewer and the rest of the machine when
+# there is no sandbox, and inline in main() it could not be asserted on.
+#
+# Takes the workspace path, empty when unsandboxed.
+review_tools() {
+  local workspace=${1:-}
+
+  REVIEW_TOOLS=("${DEFAULT_TOOLS[@]}")
+  if [[ -n ${LASTLIGHT_REVIEW_TOOLS:-} ]]; then
+    IFS=',' read -r -a REVIEW_TOOLS <<< "$LASTLIGHT_REVIEW_TOOLS"
+  fi
+
+  # Sandboxed, the tool allowlist stops being the security boundary -- the
+  # sandbox is -- so the reviewer gets Bash and can run things. Unsandboxed it
+  # stays the narrow read-only list, because then it IS the only boundary.
+  #
+  # An explicit LASTLIGHT_REVIEW_TOOLS still wins. Widening happened
+  # unconditionally when sandboxed, which is the default on any machine with a
+  # sandbox available -- so the documented override was discarded in the common
+  # case, without a word, including when it was set to NARROW the reviewer.
+  if [[ -n $workspace && -z ${LASTLIGHT_REVIEW_TOOLS:-} ]]; then
+    REVIEW_TOOLS=(Read Grep Glob Bash)
+  fi
+
+  # The ONE write the contract needs, scoped to exactly that path. Appended
+  # after any override so widening the tool list cannot accidentally drop the
+  # reviewer's ability to record its own result.
+  #
+  # BOTH verbs, and that is not belt-and-braces. The run deletes any stale
+  # findings.json before starting, so the file is guaranteed ABSENT -- and
+  # `Edit` cannot create a file. With `Edit` alone the reviewer stalls asking
+  # for permission and the run dies having already spent the model call. It
+  # only ever succeeded when the reviewer improvised with `Bash`, which the
+  # unsandboxed list does not grant at all, so the failure was a coin toss
+  # decided by which tool the reviewer happened to reach for. Scoped to the
+  # path either way: a bare `Write` would let it edit the code under review,
+  # including these scripts.
+  #
+  # RELATIVE, and main() has already cd'd to $root. A bare absolute path does
+  # NOT match (verified: the reviewer was then unable to write its own findings,
+  # which would have failed every run closed); the absolute form needs a `//`
+  # prefix. The relative form sidesteps that entirely.
+  REVIEW_TOOLS+=("Edit(${OUT_DIR}/findings.json)" "Write(${OUT_DIR}/findings.json)")
 }
 
 usage() {

@@ -120,5 +120,53 @@ ok "the unsandboxed tool list is read-only" \
 ok "...and grants no arbitrary Bash" \
   "$(printf '%s\n' "${DEFAULT_TOOLS[@]}" | grep -cx 'Bash')" "0"
 
+# ── the tool allowlist ───────────────────────────────────────────────────
+echo "--- review_tools: the reviewer must be able to CREATE its findings ---"
+tools_for() {
+  (
+    unset LASTLIGHT_REVIEW_TOOLS
+    [[ -n ${2:-} ]] && export LASTLIGHT_REVIEW_TOOLS="$2"
+    review_tools "$1"
+    printf '%s\n' "${REVIEW_TOOLS[@]}"
+  )
+}
+
+# The run deletes a stale findings.json before starting, so the file is
+# guaranteed ABSENT. `Edit` cannot create a file -- only `Write` can -- so with
+# Edit alone the reviewer stalls asking for permission and the run dies having
+# spent the model call. It only ever succeeded when the reviewer improvised
+# with `Bash`, which is not granted unsandboxed at all.
+ok "unsandboxed grants Write on the findings file" \
+  "$(tools_for '' | grep -cx 'Write(.lastlight/pr-review/findings.json)')" "1"
+ok "sandboxed grants it too" \
+  "$(tools_for /tmp/ws | grep -cx 'Write(.lastlight/pr-review/findings.json)')" "1"
+ok "an override still gets it appended" \
+  "$(tools_for '' 'Read,Grep' | grep -cx 'Write(.lastlight/pr-review/findings.json)')" "1"
+
+# Scoped, not bare. An unscoped Write would let the reviewer edit the code it
+# is reviewing -- including the guard scripts -- which is the whole reason the
+# rule is written as a path.
+ok "the Write is scoped to that one path" \
+  "$(tools_for '' | grep -cx 'Write')" "0"
+ok "...and so is the Edit" \
+  "$(tools_for '' | grep -cx 'Edit')" "0"
+ok "sandboxed grants no bare Write either" \
+  "$(tools_for /tmp/ws | grep -cx 'Write')" "0"
+
+# The behaviour the extraction must not change.
+ok "unsandboxed stays read-only apart from those two" \
+  "$(tools_for '' | grep -c '^Bash$')" "0"
+ok "sandboxed widens to Bash" \
+  "$(tools_for /tmp/ws | grep -cx 'Bash')" "1"
+ok "an explicit override wins over the sandbox widening" \
+  "$(tools_for /tmp/ws 'Read,Grep' | grep -cx 'Bash')" "0"
+# Asserted with a tool the default list does NOT contain, and by the absence of
+# one it does: checking for something present in both cannot tell a respected
+# override from an ignored one.
+ok "an override is honoured verbatim" \
+  "$(tools_for '' 'Read,WebFetch' | grep -cx 'WebFetch')" "1"
+ok "...and REPLACES the default rather than extending it" \
+  "$(tools_for '' 'Read,WebFetch' | grep -cx 'Glob')" "0"
+
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]
