@@ -120,6 +120,18 @@ expect deny "gh pr ready" 'gh pr ready 42'
 expect deny "gh pr reopen" 'gh pr reopen 42'
 expect deny "gh api POST /pulls" 'gh api -X POST repos/o/r/pulls -f title=x'
 
+# `gh api` is a GET unless told otherwise, and reading a PR lands nothing.
+# Gating every mention of /pulls blocked reading a review's own comments --
+# found while doing exactly that, in this repository.
+expect allow "gh api GET a PR" 'gh api repos/o/r/pulls/4'
+expect allow "gh api GET its comments" 'gh api repos/o/r/pulls/4/comments'
+expect allow "gh api explicit GET" 'gh api --method GET repos/o/r/pulls'
+expect allow "gh api GET with jq" 'gh api repos/o/r/pulls/4/comments --jq ".[].body"'
+# ...and the writes are still gated, whichever way they are spelled.
+expect deny "gh api --method POST" 'gh api --method POST repos/o/r/pulls -f title=x'
+expect deny "gh api PATCH" 'gh api -X PATCH repos/o/r/pulls/4 -f state=open'
+expect deny "gh api with a field implies POST" 'gh api repos/o/r/pulls --field title=x'
+
 echo "--- never gated ---"
 expect allow "git status" 'git status'
 expect allow "git commit" 'git commit -m "feat: x"'

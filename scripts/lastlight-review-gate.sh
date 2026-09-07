@@ -159,7 +159,15 @@ main() {
   # but it still catches a branch pushed BEFORE this gate existed.
   local opens=0
   grep -Eq '(^|[;|&(])[[:space:]]*gh[[:space:]]+pr[[:space:]]+(create|ready|reopen)([[:space:]]|$|\))' <<< "$cmd" && opens=1
-  grep -Eq '(^|[;|&(])[[:space:]]*gh[[:space:]]+api[^;|&]*(/pulls|repos/[^[:space:]]*/pulls)' <<< "$cmd" && opens=1
+  # `gh api` touching /pulls is only a PR-opener when it WRITES. The command
+  # defaults to GET, so gating every mention of /pulls refused ordinary reads --
+  # including reading a review's own comments on the PR it had just blocked.
+  # A write is an explicit mutating --method, or a field flag, which makes gh
+  # use POST on its own.
+  if grep -Eq '(^|[;|&(])[[:space:]]*gh[[:space:]]+api[^;|&]*(/pulls|repos/[^[:space:]]*/pulls)' <<< "$cmd" \
+    && grep -Eq '(--method|-X)[[:space:]]+(POST|PATCH|PUT|DELETE)|(^|[[:space:]])(-f|-F|--field|--raw-field|--input)([[:space:]]|=)' <<< "$cmd"; then
+    opens=1
+  fi
   if [[ $opens -eq 0 ]]; then
     grep -Eq '(^|[;|&(])[[:space:]]*git([[:space:]]+-C[[:space:]]+[^[:space:]]+)?[[:space:]]+push([[:space:]]|$|\))' <<< "$cmd" || allow
   fi
