@@ -105,6 +105,28 @@ sandbox_allowed_domains() {
 # finding, and findings.json is the one file deliberately carried back out of
 # the workspace -- so the secret leaves through the channel the README calls
 # safe, with no network egress needed.
+# What the REVIEW sandbox refuses to read: $HOME as a whole, then the stores
+# that resolve outside it.
+#
+# Both halves of that policy read from here -- `denyRead`, which confines
+# spawned processes, and `permissions.deny`, which confines the Read tool. They
+# were given different lists: the Read tool was barred from all of $HOME while
+# denyRead named only the credential files, and a sandboxed reviewer is granted
+# Bash. So the diff under review could `cat` a sibling repository's .env, a
+# shell history or another session's transcript, and findings.json is the one
+# file carried out of the workspace and posted as a PR comment. Verified before
+# the fix: a canary under $HOME came back READ-OK to Bash; after it, "Operation
+# not permitted", with the workspace still readable.
+#
+# NOT shared with the work sandbox, deliberately. Its workspace lives under
+# $HOME by default, and deny beats allow, so the same blanket rule would lock a
+# work session out of its own tree. That policy keeps the narrower list, and
+# the difference is a property of where each workspace lives.
+review_denied_reads() {
+  printf '%s\n' "$HOME"
+  sandbox_denied_reads
+}
+
 read_deny_rules() {
   local path
   # HOME AS A WHOLE, not a list of secrets inside it.
@@ -119,11 +141,11 @@ read_deny_rules() {
   # The workspace lives under $TMPDIR, outside $HOME, so denying $HOME costs
   # the reviewer nothing: its diff and its skill files are staged into the
   # workspace precisely so that nothing it needs is left behind this line.
-  printf 'Read(/%s)\nRead(/%s/**)\n' "$HOME" "$HOME"
-  # The named stores stay, because some resolve outside $HOME.
+  # From review_denied_reads, so this rule and the denyRead rule cannot be
+  # given different boundaries by editing one of them.
   while IFS= read -r path; do
     printf 'Read(/%s)\nRead(/%s/**)\n' "$path" "$path"
-  done < <(sandbox_denied_reads)
+  done < <(review_denied_reads)
 }
 
 # Copy the review assets into the workspace so the reviewer never has to read
@@ -148,7 +170,7 @@ sandbox_settings_json() {
   jq -n \
     --arg ws "$workspace" \
     --arg tmp "$tmp" \
-    --argjson deny "$(sandbox_denied_reads | jq -R . | jq -s .)" \
+    --argjson deny "$(review_denied_reads | jq -R . | jq -s .)" \
     --argjson net "$(sandbox_allowed_domains | jq -R . | jq -s .)" \
     --argjson readdeny "$(read_deny_rules | jq -R . | jq -s .)" \
     '{

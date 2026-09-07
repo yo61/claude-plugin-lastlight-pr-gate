@@ -243,5 +243,34 @@ ok "...and not the base every sandbox shares" \
 ok "the base still carries the model endpoint" \
   "$(sandbox_base_domains | grep -c '^api\.anthropic\.com$')" "1"
 
+echo "--- denyRead must cover \$HOME, not just the curated stores ---"
+# The curated list names the files that hold tokens. It does NOT stop a spawned
+# process reading everything else: a sibling repo's .env, a shell history,
+# another session's transcript under ~/.claude/projects. The Read TOOL is
+# blocked from all of that by read_deny_rules, but a sandboxed reviewer is
+# granted Bash -- so `cat ~/other-project/.env` went through the half of the
+# policy that had no such rule, and findings.json is copied out of the
+# workspace and posted publicly.
+#
+# The workspace lives under TMPDIR, not $HOME, so denying $HOME wholesale costs
+# the reviewer nothing it needs.
+ok "denyRead blocks \$HOME itself" \
+  "$(jq -r --arg h "$HOME" '.sandbox.filesystem.denyRead | index($h) != null' <<< "$POLICY")" "true"
+ok "review_denied_reads leads with \$HOME" \
+  "$(review_denied_reads | head -1 | grep -cx "$HOME")" "1"
+# The SHARED list must NOT carry it: the work sandbox derives from that one and
+# its workspace lives under $HOME, where deny beats allow.
+ok "the shared credential list does not" \
+  "$(sandbox_denied_reads | grep -cx "$HOME")" "0"
+ok "...and the Read rules come from the same place as denyRead" \
+  "$(read_deny_rules | grep -cx "Read(/$HOME)")" "1"
+# The specific stores stay listed. They cost nothing and say what the rule is
+# for; XDG's location for git credentials is not under a blanket $HOME rule on
+# a machine where XDG_CONFIG_HOME points elsewhere.
+ok "...and still lists the credential stores" \
+  "$(sandbox_denied_reads | grep -cx "$HOME/.ssh")" "1"
+ok "...including the XDG git credentials path" \
+  "$(sandbox_denied_reads | grep -c '/git/credentials$')" "1"
+
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]
