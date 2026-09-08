@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016  # Single quotes are the point throughout this file:
+# every case is a command string handed to the gate as DATA, and the gate has to
+# see the `$FLAGS` or the backtick that a real command line would carry. Letting
+# any of them expand would both change what is being tested and run it -- test
+# data for a guard has to stay inert, which cost this project a live `rm -rf`
+# during a suite run once already.
+#
 # Test suite for lastlight-review-gate.sh.
 # Run: bash ~/.claude/hooks/lastlight-review-gate.test.sh
 #
@@ -147,6 +154,32 @@ expect deny "gh api --input" 'gh api repos/o/r/pulls --input body.json'
 # ...and an attached GET is still a read.
 expect allow "gh api --method=GET" 'gh api --method=GET repos/o/r/pulls'
 expect allow "gh api -XGET" 'gh api -XGET repos/o/r/pulls/4'
+
+# An expansion is not a flag this scan can read, and gh sees what the shell
+# produces rather than what is written here. With FLAGS='-X PUT' the first of
+# these merges a pull request, and it scored as method-less -- a read -- because
+# the only `-X` in the string was inside a variable name.
+#
+# The quoted forms are here because quoting looks like it should help and does
+# not: `"$FLAGS"` stays a single word, but gh takes an attached value, so one
+# word is enough to carry `-XPUT`. Confirmed against gh itself rather than
+# reasoned about: `gh api repos/cli/cli "-XHEAD"` sent a HEAD request.
+expect deny "flags from a variable" 'gh api repos/o/r/pulls/4/merge $FLAGS'
+expect deny "flags from a quoted variable" 'gh api repos/o/r/pulls/4/merge "$FLAGS"'
+expect deny "flags from a substitution" 'gh api repos/o/r/pulls/4/merge "$(cat /tmp/m)"'
+expect deny "flags from a backtick" 'gh api repos/o/r/pulls/4/merge `cat /tmp/m`'
+# An unquoted expansion in the path is no safer: word splitting means
+# OWNER='x -XPUT y' puts a flag on the command line from inside the path.
+expect deny "a variable in the path" 'gh api repos/$OWNER/$REPO/pulls'
+# The cost, stated rather than hidden: a read written with a variable is
+# refused too. That is the direction this rule errs in on purpose -- a refusal
+# gets reported, a silent merge does not.
+expect deny "...even spelled as an explicit GET" 'gh api -XGET repos/$OWNER/r/pulls'
+
+# ...but only within the gh segment that names /pulls. The scan is per
+# invocation, so an expansion in an unrelated command on the same line is not
+# this rule's business.
+expect allow "an expansion in another command" 'echo $HOME; gh api repos/o/r/pulls/4'
 
 # gh does not validate or normalise the method value, and the shell has
 # already collapsed repeated spaces before gh sees the argument -- so these

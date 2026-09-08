@@ -92,7 +92,19 @@ repos:
         entry: bash tests/readme-counts.sh
         language: system
         pass_filenames: false
-        files: '^(README\.md|tests/.*\.test\.sh)$'
+        # scripts/ too, not just the suites. Several totals are derived rather
+        # than written down: the suites loop over `edit_denied_paths` and
+        # `sandbox_denied_reads`, which live in scripts/, so adding one
+        # credential store there moves three printed totals with no test file
+        # touched. Measured -- one line added to sandbox_denied_reads took that
+        # suite from 85 to 86 while this filter skipped the check.
+        #
+        # The suite hooks still passed, because their expectations derive from
+        # the same list, so the commit went green locally and CI -- which runs
+        # this unconditionally -- went red. That local-green/CI-red split is
+        # the bug class this check was added to prevent, reappearing in the
+        # check itself.
+        files: '^(README\.md|(scripts|tests)/.*\.sh)$'
 
   - repo: https://github.com/alessandrojcm/commitlint-pre-commit-hook
     rev: v9.26.0

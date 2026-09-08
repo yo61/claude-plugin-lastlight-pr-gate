@@ -65,7 +65,12 @@ ok "--model" "$(parsed --model opus)" "wt=0 model=opus rest="
 # engage and the run died complaining about a merge base.
 ok "--model then --working-tree" "$(parsed --model opus --working-tree)" "wt=1 model=opus rest="
 ok "--working-tree then --model" "$(parsed --working-tree --model opus)" "wt=1 model=opus rest="
-ok "flags then a base ref" "$(parsed --working-tree origin/main)" "wt=1 model=sonnet rest=origin/main"
+# This case used to assert that a base ref survives --working-tree, which is
+# what the parser did -- and then `main` overwrote the base with HEAD and
+# reviewed something narrower than was asked for. The suite was documenting the
+# bug as the contract. The combination is refused now; see the refusal below.
+ok "a flag then a base ref, for a flag that takes one" \
+  "$(parsed --model opus origin/main)" "wt=0 model=opus rest=origin/main"
 
 echo "--- parse_options: the environment is a default, not an override ---"
 ok "LASTLIGHT_REVIEW_MODEL is used when no flag is given" \
@@ -90,6 +95,19 @@ ok "--help does too" \
 ok "an unknown flag is rejected" "$(refused --bogus)" "lastlight-review-run: unknown option: --bogus"
 ok "...and so is a short one" "$(refused -x)" "lastlight-review-run: unknown option: -x"
 ok "--model without a value is rejected" "$(refused --model)" "lastlight-review-run: --model needs a value"
+# A base ref with --working-tree is two different answers to "review what?",
+# and the loser used to be the one the caller typed: `main` overwrote the base
+# with HEAD, reviewed only the uncommitted changes, and exited 0. A review that
+# covers less than the caller asked for and says nothing is the failure this
+# whole script exists to prevent.
+ok "--working-tree with a base ref is refused" \
+  "$(refused --working-tree origin/main)" \
+  "lastlight-review-run: --working-tree reviews what is not yet committed, so there is nothing to compare against a base ref -- but 'origin/main' was given as one. Pass one or the other: the ref alone reviews the branch, --working-tree alone reviews the uncommitted changes."
+ok "...whichever order they come in" \
+  "$(refused --working-tree origin/main | grep -c "given as one")" "1"
+# Each alone stays valid: the refusal is about the combination.
+ok "--working-tree alone is fine" "$(parsed --working-tree)" "wt=1 model=sonnet rest="
+ok "a base ref alone is still fine" "$(parsed origin/main)" "wt=0 model=sonnet rest=origin/main"
 
 # ── the prompt ───────────────────────────────────────────────────────────
 echo "--- prompt: points at the assets it is given ---"
@@ -266,5 +284,97 @@ ok "the prompt names that exact path" \
 # ...and not the absolute form, which the rule would not match.
 ok "the prompt does not ask for an absolute write" \
   "$([[ $PROMPT == *"/some/root/$WPATH"* ]] && echo yes || echo no)" "no"
+echo "--- findings_contained: the copy-back must not follow a link out ---"
+# Ground truth, not a mock: real directories, real links, and the same helper
+# `main` calls. The escape this closes was reproduced first -- a symlink at
+# findings.json passed `[[ -f ]]`, `cp` dereferenced it, and the file it named
+# arrived in the real repository as the review's findings.
+#
+# The copy runs OUTSIDE the sandbox, so what these assert is not "the reviewer
+# behaved" but "this process refuses to be used as the reviewer's hands".
+FC=$(mktemp -d)
+FC_OUTSIDE=$FC/outside-secret.json
+printf '{"token":"not-in-the-workspace"}\n' > "$FC_OUTSIDE"
+
+# $1 workspace name; leaves $FC/$1/.lastlight/pr-review created and empty.
+fc_ws() {
+  local ws=$FC/$1
+  mkdir -p "$ws/$OUT_DIR"
+  printf '%s' "$ws"
+}
+
+contained() {
+  if findings_contained "$1"; then printf 'yes'; else printf 'no'; fi
+}
+
+WS=$(fc_ws plain)
+printf '{"findings":[]}\n' > "$WS/$OUT_DIR/findings.json"
+ok "a file the reviewer wrote is copied" "$(contained "$WS")" "yes"
+
+WS=$(fc_ws symlink)
+ln -s "$FC_OUTSIDE" "$WS/$OUT_DIR/findings.json"
+ok "a symlink pointing outside is refused" "$(contained "$WS")" "no"
+# The escape as it actually presents itself: the guard that was there agreed
+# the path was a file, which is why the copy went ahead.
+ok "...and it is a link the old check called a file" \
+  "$([[ -f $WS/$OUT_DIR/findings.json ]] && printf 'yes')" "yes"
+
+WS=$(fc_ws danglinglink)
+ln -s "$FC/nothing-here.json" "$WS/$OUT_DIR/findings.json"
+ok "a dangling symlink is refused" "$(contained "$WS")" "no"
+
+# A link one level up: the file at the end is real and is not a link, so only
+# resolving the directory catches it.
+WS=$FC/dirlink
+mkdir -p "$WS" "$FC/elsewhere/pr-review"
+ln -s "$FC/elsewhere" "$WS/.lastlight"
+printf '{"findings":[]}\n' > "$FC/elsewhere/pr-review/findings.json"
+ok "a symlinked .lastlight is refused" "$(contained "$WS")" "no"
+ok "...though the path itself is a plain file" \
+  "$([[ ! -L $WS/$OUT_DIR/findings.json && -f $WS/$OUT_DIR/findings.json ]] && printf 'yes')" "yes"
+
+WS=$(fc_ws hardlink)
+ln "$FC_OUTSIDE" "$WS/$OUT_DIR/findings.json"
+ok "a hardlink to a file outside is refused" "$(contained "$WS")" "no"
+
+WS=$(fc_ws absent)
+ok "nothing written at all is refused" "$(contained "$WS")" "no"
+
+echo "--- reviewer_git_env: git must be quiet AND still work ---"
+# The sandbox denies $HOME, and git looks there for four things. Asserted
+# against git itself rather than against the list: GIT_CONFIG_COUNT has to
+# agree with the number of KEY_n pairs, and a mismatch drops the last override
+# silently -- git reads exactly COUNT of them and never complains about the
+# rest.
+RGE=()
+while IFS= read -r kv; do RGE+=("$kv"); done < <(reviewer_git_env)
+
+git_with_env() { env "${RGE[@]}" git "$@" 2>&1; }
+
+ok "the global config is taken out of $HOME" \
+  "$(printf '%s\n' "${RGE[@]}" | grep -c '^GIT_CONFIG_GLOBAL=/dev/null$')" "1"
+ok "and the system config with it" \
+  "$(printf '%s\n' "${RGE[@]}" | grep -c '^GIT_CONFIG_NOSYSTEM=1$')" "1"
+# These two are the ones that matter and the ones an obvious fix leaves out:
+# GIT_CONFIG_GLOBAL does not govern where excludes and attributes are looked
+# for, so without them git still reaches into $HOME and still warns.
+ok "core.excludesFile is really applied" \
+  "$(git_with_env config --get core.excludesFile)" "/dev/null"
+ok "core.attributesFile is really applied" \
+  "$(git_with_env config --get core.attributesFile)" "/dev/null"
+# The count and the keys must agree, or git silently ignores the surplus.
+ok "GIT_CONFIG_COUNT matches the keys given" \
+  "$(printf '%s\n' "${RGE[@]}" | grep -c '^GIT_CONFIG_KEY_[0-9]*=')" \
+  "$(printf '%s\n' "${RGE[@]}" | sed -n 's/^GIT_CONFIG_COUNT=//p')"
+# Whatever else changes, the reviewer must still be able to use git.
+ok "git still works under it" "$(git_with_env rev-parse --is-inside-work-tree)" "true"
+
+# This process computes the attestation's diff hash with `git hash-object`,
+# which applies the clean filter that core.attributesFile selects. If these
+# were exported rather than set on the reviewer's command, the hash the
+# recorder checks would be computed under a different attributes file.
+ok "they are not exported into this process" \
+  "${GIT_CONFIG_COUNT:-unset}${GIT_CONFIG_GLOBAL:-}" "unset"
+
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]

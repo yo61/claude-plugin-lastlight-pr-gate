@@ -200,6 +200,28 @@ gh_api_segment_writes() {
   grep -Eq '(^|[;|&(])[[:space:]]*gh[[:space:]]+api[^;|&]*(/pulls|repos/[^[:space:]]*/pulls)' \
     <<< "$seg" || return 1
 
+  # An expansion can be anything, so the scan below is reading a command that
+  # is not the one gh will receive. `gh api repos/o/r/pulls/4/merge $FLAGS`
+  # has no literal flag, scores as method-less, and merges the PR ungated --
+  # the silent-allow failure this rule was inverted to end.
+  #
+  # Quoting does not help, which is the part worth measuring rather than
+  # assuming: `"$FLAGS"` stays one word, but gh takes an attached value, so
+  # `"-XPUT"` as a single argument is a PUT. Confirmed on the wire against
+  # gh -- `gh api repos/cli/cli "-XHEAD"` sent `HEAD /repos/cli/cli`. (The
+  # separated form `"-X PUT"` does die, at Go's http layer, on the leading
+  # space -- but that is one spelling of several, and spelling-by-spelling is
+  # exactly how this rule failed four times.)
+  #
+  # WHAT THIS STILL DOES NOT COVER, and it is the same shape: an expansion can
+  # hide the ENDPOINT too, and `gh api "repos/o/r/$THING"` never matches the
+  # test above, so it is never examined. Widening the endpoint match to every
+  # `gh api` carrying an expansion would close it and would also gate ordinary
+  # issue and repo reads on every Bash call. That is a change to what this
+  # function is for, and it is left for its own decision rather than folded in
+  # behind a bug fix.
+  grep -q '[$`]' <<< "$seg" && return 0
+
   # Field flags make gh POST on its own, whatever the method says. `-ftitle=x`
   # carries its value with no separator, so these are matched on the flag.
   grep -Eq '(^|[[:space:]])(-[fF]|--field|--raw-field|--input)' <<< "$seg" && return 0

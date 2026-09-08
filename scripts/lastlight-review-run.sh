@@ -200,8 +200,15 @@ main() {
   # `timeout` kills the session with SIGTERM, so nothing is flushed and the log
   # is empty by construction -- "failed or timed out; see the log" then sent the
   # reader to an empty file, which is where this message used to end.
+  # Only when sandboxed: unsandboxed, $HOME is readable, nothing warns, and
+  # these would take the user's own gitignore away from the reviewer for no gain.
+  local -a git_env=()
+  if [[ -n $workspace ]]; then
+    while IFS= read -r kv; do git_env+=("$kv"); done < <(reviewer_git_env)
+  fi
+
   local rc=0
-  (cd "$review_root" && timeout "$TIMEOUT" claude -p "$(prompt "$review_root" "$base" "$sha" "$assets_root")" \
+  (cd "$review_root" && env "${git_env[@]+"${git_env[@]}"}" timeout "$TIMEOUT" claude -p "$(prompt "$review_root" "$base" "$sha" "$assets_root")" \
     --allowed-tools "${tools[@]}" \
     "${extra_args[@]}" \
     --model "$MODEL") > "$OUT_DIR/reviewer.log" 2>&1 || rc=$?
@@ -223,7 +230,9 @@ main() {
 
   # The reviewer wrote inside the isolated workspace; bring the one artifact
   # the contract produces back out. Nothing else crosses the boundary.
-  if [[ -n $workspace && -f "$workspace/$OUT_DIR/findings.json" ]]; then
+  if [[ -n $workspace ]] && [[ -e "$workspace/$OUT_DIR/findings.json" || -L "$workspace/$OUT_DIR/findings.json" ]]; then
+    findings_contained "$workspace" \
+      || die "the reviewer left something other than a plain file where its findings should be, in $workspace/$OUT_DIR. Refusing to copy it out: this step runs outside the sandbox and would read whatever that path points at."
     cp "$workspace/$OUT_DIR/findings.json" "$OUT_DIR/findings.json"
   fi
   [[ -f "$OUT_DIR/findings.json" ]] \
@@ -298,6 +307,74 @@ main() {
 # attestation that unblocks the push. A safety check that vanishes when an
 # undeclared tool is missing is worse than no check, because it reads as having
 # passed.
+# The reviewer's artifact, but only if it is genuinely a file the reviewer
+# created inside the sandbox.
+#
+# The copy-back in `main` runs in THIS process -- outside the sandbox, with the
+# user's own privileges -- and `cp` follows symlinks. The reviewer holds Bash
+# inside the workspace, and a symlink is a write to a path it is allowed to
+# write, so
+#
+#     ln -sf ~/.claude/.credentials.json .lastlight/pr-review/findings.json
+#
+# makes this process read the file the sandbox exists to keep it away from and
+# deposit it in the real repository. `[[ -f ]]` does not catch it: only `-L`
+# does not follow a link. Nor does the `jq -e` check downstream -- credentials
+# are valid JSON. The diff being reviewed is untrusted input by this script's
+# own doctrine, so this is reachable without anyone acting in bad faith
+# locally.
+#
+# Three properties, each true of any file the reviewer actually wrote:
+#   - the path is not itself a symlink;
+#   - its directory resolves inside the workspace -- .lastlight/ can be a link
+#     too, which puts a real file at a real path outside;
+#   - it has one link. A hardlink shares content without being a symlink;
+#     whether the sandbox refuses to create one against a denied source is not
+#     something I could test from here, and refusing costs nothing. `find
+#     -links +1` rather than `stat`, whose flags differ between BSD and GNU in
+#     a way that has already produced a wrong answer here (see tests/lib.sh).
+#
+# Refuse rather than copy carefully: nothing legitimate needs the artifact to
+# be anything but a plain file. The reviewer session has exited by now, so no
+# one can swap the path between this check and the copy.
+findings_contained() {
+  local ws=$1 path=$1/$OUT_DIR/findings.json dir root
+
+  [[ ! -L $path && -f $path ]] || return 1
+  dir=$(cd -P "$ws/$OUT_DIR" 2> /dev/null && pwd -P) || return 1
+  root=$(cd -P "$ws" 2> /dev/null && pwd -P) || return 1
+  [[ $dir == "$root" || $dir == "$root"/* ]] || return 1
+  [[ -z $(find "$path" -links +1 2> /dev/null) ]]
+}
+
+# Environment for the reviewer's git, when the review is sandboxed.
+#
+# The sandbox denies reads across $HOME as a whole, and git looks for four
+# things there: the global config, the system config, and -- independently of
+# where config lives -- $XDG_CONFIG_HOME/git/{ignore,attributes}. Each denied
+# lookup prints `warning: unable to access ...: Permission denied`, twice per
+# `git status`, on the stderr the reviewer reads.
+#
+# Measured, because the obvious answer is wrong: git is NOT fatal here. Every
+# command exits 0 and produces correct output with $HOME entirely untraversable
+# (git 2.55). And GIT_CONFIG_GLOBAL plus GIT_CONFIG_NOSYSTEM, which is the pair
+# that looks like the fix, silences none of it -- the warnings come from the
+# excludes and attributes paths, which are resolved separately. It takes all
+# four to get a clean stderr.
+#
+# Scoped to the sandboxed run and set on that command alone, never exported:
+# this process computes the attestation's diff hash with `git hash-object`,
+# which applies the clean filter, and core.attributesFile is what selects it.
+# Changing it here would change the hash the recorder checks.
+reviewer_git_env() {
+  printf '%s\n' \
+    GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_CONFIG_NOSYSTEM=1 \
+    GIT_CONFIG_COUNT=2 \
+    GIT_CONFIG_KEY_0=core.excludesFile GIT_CONFIG_VALUE_0=/dev/null \
+    GIT_CONFIG_KEY_1=core.attributesFile GIT_CONFIG_VALUE_1=/dev/null
+}
+
 tool_rule_rejected() {
   grep -q 'Ignoring --allowedTools rule' "$1" 2> /dev/null
 }
@@ -403,6 +480,16 @@ parse_options() {
     esac
   done
   REST=("$@")
+
+  # The two say different things about what to review, and `main` resolves that
+  # by overwriting the base with HEAD -- so the run reviewed only uncommitted
+  # work, exited 0, and reported success while the caller believed everything
+  # since the ref they named had been covered. Committed branch work simply was
+  # not looked at. Refuse instead: this script already holds that unsupported
+  # input must say so rather than be quietly reinterpreted.
+  if [[ $WORKING_TREE -eq 1 && ${#REST[@]} -gt 0 ]]; then
+    die "--working-tree reviews what is not yet committed, so there is nothing to compare against a base ref -- but '${REST[0]}' was given as one. Pass one or the other: the ref alone reviews the branch, --working-tree alone reviews the uncommitted changes."
+  fi
 }
 
 prompt() {
