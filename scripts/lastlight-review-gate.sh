@@ -100,7 +100,20 @@ resolve_target() {
   # the hook's own process directory and judged the push against a completely
   # different repository -- one that happened to have a marker.
   [[ -z $p || $p == /* ]] || p=$fallback/$p
-  if [[ -n $p && -d $p ]]; then printf '%s' "$p"; else printf '%s' "$fallback"; fi
+  # ...and it has to BE a repository. A `cd` inside a closed subshell does not
+  # move where a later command runs, so `(cd /tmp); git push origin main`
+  # resolved /tmp, found no git dir there, and the caller returned 0 -- allowing
+  # a push that bash ran in the original repository. Falling back to where the
+  # command actually runs turns that into the ordinary check.
+  #
+  # This does not model subshells, and does not need to: the contract asks the
+  # gate to recognise ordinary spellings and to fail toward the command's own
+  # directory, not to track shell scope.
+  if [[ -n $p && -d $p ]] && git -C "$p" rev-parse --git-dir > /dev/null 2>&1; then
+    printf '%s' "$p"
+  else
+    printf '%s' "$fallback"
+  fi
 }
 
 # Local revisions whose commits would land remotely, one per line. Empty output
@@ -238,9 +251,17 @@ shell_segments() {
     END {
       seg = ""
       mode = ""
+      prev_ws = 1
       n = length(buf)
       for (i = 1; i <= n; i++) {
         c = substr(buf, i, 1)
+        # Whether a `#` here would start a word, and so a comment. Set from the
+        # PREVIOUS character, before this one is classified.
+        if (i > 1) {
+          pc = substr(buf, i - 1, 1)
+          prev_ws = (pc == " " || pc == "\t" || pc == "\n" || pc == ";" \
+            || pc == "|" || pc == "&" || pc == "(" || pc == ")") ? 1 : 0
+        }
         if (mode == "sq") {
           if (c == SQ) mode = ""
           # A newline inside quotes is text, but the caller reads these segments
@@ -284,6 +305,16 @@ shell_segments() {
           # that gates a gh call whose flags come from a substitution looks for
           # this character in the raw segment.
           if (c == BT) { print seg c; seg = ""; continue }
+          # A comment, here too -- and for the opposite reason to the
+          # tokenizer. A separator INSIDE a comment would split the line and
+          # hand back the commented-out half as a live segment, so
+          # `echo hi # && git push origin main` would be denied for a push bash
+          # never runs. Denying ordinary work is the worse failure.
+          if (c == "#" && (i == 1 || prev_ws)) {
+            while (i <= n && substr(buf, i, 1) != "\n") i++
+            i--
+            continue
+          }
           if (c == "&") {
             # Not every & separates. A redirection carries one -- 2>&1, >&2,
             # <&3, &>out -- and the shell strips it before the command runs.
@@ -470,6 +501,16 @@ shell_words() {
           if (c == "\"") { mode = "dq"; started = 1; continue }
           # A backtick is command substitution, not part of the word.
           if (c == BT)   { started = 1; continue }
+          # An unquoted `#` at the START of a word begins a comment, and the
+          # rest of the line is not the command. Without this its words became
+          # the push argument list, so `git push origin main # --dry-run`
+          # really pushed while the gate read the commented-out flag as the
+          # push and allowed it. Mid-word it is an ordinary character: `a#b` is
+          # one word.
+          if (c == "#" && started == 0) {
+            while (i <= n && substr(buf, i, 1) != "\n") i++
+            continue
+          }
           if (c == " " || c == "\t" || c == "\n") {
             if (started) print w
             w = ""; started = 0

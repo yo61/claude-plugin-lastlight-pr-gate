@@ -585,6 +585,37 @@ expect deny "...from a variable" 'git push origin $BRANCH'
 expect deny "...from a substitution" 'git push origin $(echo other)'
 expect allow "...while a literal reviewed HEAD still goes" 'git push origin HEAD'
 
+echo "--- a trailing comment is not part of the command ---"
+# The words after an unquoted `#` landed in the push argument list, so the gate
+# read a commented-out flag as the pushs own and allowed a real push.
+unmark
+expect deny "a commented --dry-run does not excuse a push" 'git push origin main # --dry-run'
+expect deny "...nor a commented --delete" 'git push origin main # --delete'
+expect deny "an ordinary trailing comment changes nothing" 'git push origin main # finally'
+# Mid-word a `#` is an ordinary character: `a#b` is one word, not a comment.
+expect deny "a # inside a word is not a comment" 'git push origin main#tag'
+# ...and it is only a comment outside quotes.
+expect deny "a # inside quotes is text" 'git push origin main -o "# note"'
+
+# The other direction, and the reason comments are handled in the SEGMENTER as
+# well: a separator inside a comment would split the line and hand back the
+# commented-out half as a live segment. Denying a push bash never runs is the
+# class 1 failure, which the contract ranks worse than the one above.
+expect allow "a commented-out push is not a push" 'echo hi # && git push origin main'
+expect allow "...a whole line commented out" '# git push origin main'
+expect deny "...while a live push after a comment still counts" \
+  "echo hi # a note${NL}git push origin main"
+
+echo "--- a directory that is not a repository is not the target ---"
+# `cd` inside a CLOSED subshell does not move where a later command runs, so
+# the push resolved somewhere with no git dir and was allowed while bash ran it
+# here. Falling back to the command's own directory turns that into the
+# ordinary check; the gate does not model subshells and does not need to.
+expect deny "a cd in a closed subshell does not move the push" \
+  '(cd /tmp); git push origin main'
+expect deny "...even when the subshell cd is inside the repo" \
+  '(cd . && true); git push origin main'
+
 echo "--- a -C elsewhere must not decide where this push is judged ---"
 # resolve_target preferred any `git -C <dir>` found in the accumulated prefix
 # over the push itself, so an unrelated command naming another repository
