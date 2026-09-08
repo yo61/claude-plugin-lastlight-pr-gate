@@ -337,6 +337,35 @@ expect deny "...from a variable" 'git push origin $BRANCH'
 expect deny "...from a substitution" 'git push origin $(echo other)'
 expect allow "...while a literal reviewed HEAD still goes" 'git push origin HEAD'
 
+echo "--- a push ref from a quoted substitution ---"
+# The segmenter cuts at an opening substitution even inside double quotes, so
+# the outer command was emitted with a dangling quote -- unparseable, therefore
+# skipped, therefore never judged. The expansion rule that would have denied it
+# lives further down and never ran.
+#
+# `git push origin "$(git branch --show-current)"` is an ordinary thing to
+# write, and it was allowed while the unquoted form was denied.
+unmark
+expect deny "a quoted substitution" 'git push origin "$(echo other)"'
+expect deny "...a quoted backtick" 'git push origin "`echo other`"'
+expect deny "...the ordinary idiom" 'git push origin "$(git branch --show-current)"'
+# The unquoted forms were already denied; asserted together so the two spellings
+# cannot drift apart again.
+expect deny "...unquoted, for scale" 'git push origin $(echo other)'
+expect deny "...a quoted variable" 'git push origin "$BRANCH"'
+# A dry run still sends nothing, whatever its arguments are made of.
+expect allow "a dry run with a substitution in it" 'git push --dry-run "$(echo x)"'
+
+# ...and the same, with HEAD REVIEWED. Above, every case denies whether or not
+# the expansion is noticed, because with no marker anywhere the HEAD fallback
+# denies too -- the right verdict for the wrong reason. Mutation testing found
+# it. A marker at HEAD is what separates "this push names something the gate
+# cannot read" from "this push is fine".
+mark "$(git -C "$REPO" rev-parse HEAD)"
+expect deny "a quoted substitution, with HEAD reviewed" 'git push origin "$(echo other)"'
+expect allow "...while a literal HEAD still goes" 'git push origin HEAD'
+unmark
+
 echo "--- a trailing comment is not part of the command ---"
 # The words after an unquoted `#` landed in the push argument list, so the gate
 # read a commented-out flag as the pushs own and allowed a real push.

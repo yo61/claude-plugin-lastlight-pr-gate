@@ -618,13 +618,17 @@ cmd_list() {
     printf 'no workspaces for this repository\n' >&2
     return 0
   }
+  # -prune on the find below, or it descends INTO each clone and reports any
+  # directory named `repo` inside the checked-out tree as a workspace of its
+  # own. A project with `tools/repo/` got an invented second row, with state and
+  # SHA read from inside the real clone -- misleading about what is in flight.
   while IFS= read -r slot; do
     ws=$slot/repo
     branch=${slot#"$repo_root"/}
     state=clean
     [[ -n $(git -C "$ws" status --porcelain 2> /dev/null) ]] && state=dirty
     printf '%-40s %-6s %s\n' "$branch" "$state" "$(git -C "$ws" rev-parse --short HEAD 2> /dev/null || echo '-')"
-  done < <(find "$repo_root" -type d -name repo -exec dirname {} \; | sort)
+  done < <(find "$repo_root" -type d -name repo -prune -exec dirname {} \; | sort)
 }
 
 main() {

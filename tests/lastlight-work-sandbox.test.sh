@@ -510,5 +510,52 @@ echo "--- start marks the clone as a workspace ---"
 # is indistinguishable from the repository it came from.
 ok "the sentinel path is inside the clone git dir" \
   "$(work_sentinel_path /some/ws)" "/some/ws/.git/lastlight-work-sandbox"
+echo "--- list must not invent workspaces ---"
+# `find` descended INTO each clone, so any directory named `repo` inside a
+# checked-out tree came back as a workspace of its own -- a project with
+# tools/repo/ got a second, invented row, with state and SHA read from inside
+# the real clone. Misleading about what is actually in flight.
+#
+# This runs `list`. The first version asserted on `find` directly, which meant
+# mutating the script changed nothing and the case proved only that find works.
+LIST_SRC=$TMP/listsrc
+mkdir -p "$LIST_SRC"
+git init -q -b main "$LIST_SRC"
+git -C "$LIST_SRC" config user.email t@t
+git -C "$LIST_SRC" config user.name t
+echo x > "$LIST_SRC/f.txt"
+git -C "$LIST_SRC" add f.txt
+git -C "$LIST_SRC" commit -qm "feat: initial"
+
+LIST_ROOT=$TMP/listwork
+mkdir -p "$LIST_ROOT"
+
+# `start` ends with `exec claude`, and its containment proof is a model call.
+# Left alone, this case started a real session and spent tokens on every suite
+# run -- in the plugin whose whole purpose is not spending them. A stub on PATH
+# answers the exec, and VERIFY=off skips the probe. The workspace itself is
+# still built by the real `start`, because that is the layout `list` reads and
+# reproducing it here would mean copying the repo-key hash out of the script.
+LIST_STUB=$TMP/liststub
+mkdir -p "$LIST_STUB"
+printf '#!/bin/sh\nexit 0\n' > "$LIST_STUB/claude"
+chmod +x "$LIST_STUB/claude"
+
+(
+  cd "$LIST_SRC" || exit 1
+  PATH=$LIST_STUB:$PATH LASTLIGHT_WORK_VERIFY=off LASTLIGHT_WORK_ROOT=$LIST_ROOT \
+    "$WORK" start -b feat/listcase > /dev/null 2>&1
+) || true
+
+# A directory named `repo` INSIDE the checked-out tree, which is what the bug
+# needed. Created after `start` so it lands in the clone rather than the source.
+LIST_WS=$(find "$LIST_ROOT" -type d -name repo -prune -print 2> /dev/null | head -1)
+if [[ -n $LIST_WS ]]; then
+  mkdir -p "$LIST_WS/tools/repo" "$LIST_WS/vendor/repo"
+fi
+
+ok "one row per workspace, whatever the tree contains" \
+  "$(cd "$LIST_SRC" && LASTLIGHT_WORK_ROOT=$LIST_ROOT "$WORK" list 2> /dev/null | grep -c .)" "1"
+
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]

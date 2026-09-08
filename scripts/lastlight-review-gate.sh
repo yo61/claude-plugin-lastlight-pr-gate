@@ -275,10 +275,17 @@ shell_segments() {
           if (c == "\\" && i < n) { seg = seg c substr(buf, ++i, 1); continue }
           # ...but double quotes are NOT opaque: the shell executes $( ) and
           # backticks inside them.
+          # The split leaves the outer command with a dangling quote, which
+          # is an artefact of cutting here rather than anything the command
+          # did -- and an unparseable segment is skipped, so a push whose ref
+          # came from a quoted substitution was never judged at all. Close the
+          # quote, and keep the marker character: the segment has to stay
+          # parseable AND still show that an expansion was in it, because that
+          # is what the refusal downstream rests on.
           if (c == "$" && i < n && substr(buf, i + 1, 1) == "(") {
-            print seg; seg = ""; mode = ""; i++; continue
+            print seg "$\""; seg = ""; mode = ""; i++; continue
           }
-          if (c == BT) { print seg c; seg = ""; mode = ""; continue }
+          if (c == BT) { print seg c "\""; seg = ""; mode = ""; continue }
           if (c == "\"") mode = ""
           seg = seg (c == "\n" ? " " : c)
         } else {
