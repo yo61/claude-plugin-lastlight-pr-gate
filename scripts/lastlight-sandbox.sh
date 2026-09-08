@@ -192,6 +192,50 @@ sandbox_clear_runner_paths() {
   done < <(sandbox_runner_paths)
 }
 
+# What the reviewer's environment is allowed to contain.
+#
+# Configuration, not credentials: enough to find a binary, resolve a host,
+# trust a CA and write a temp file. Everything else is dropped, which is what
+# takes GITHUB_TOKEN, GH_TOKEN, NPM_TOKEN and the AWS variables out of reach.
+#
+# A keep-list rather than a denylist of token names, for the reason
+# read_deny_rules already gives about reads: a curated denylist protects what
+# was thought of, and a reviewer that can read one variable can read them all.
+sandbox_env_keep() {
+  printf '%s\n' \
+    PATH HOME SHELL USER LOGNAME \
+    TMPDIR TMP TEMP \
+    TERM LANG LC_ALL \
+    HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy \
+    SSL_CERT_FILE SSL_CERT_DIR NODE_EXTRA_CA_CERTS \
+    XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME
+}
+
+# The environment to hand a sandboxed `claude`, as NAME=value lines.
+#
+# WHAT THIS DOES NOT DO, stated plainly: ANTHROPIC_* and CLAUDE_* are passed
+# through, and ANTHROPIC_API_KEY is a credential. The session cannot
+# authenticate without it, so scrubbing it would not harden the review, it
+# would end it -- and the reviewer holding the key that pays for the reviewer
+# is a different exposure from it holding a key to someone's repositories. The
+# sandbox denies READING ~/.claude/.credentials.json, and this is the gap
+# beside that rule: closing it means the CLI scrubbing its own children's
+# environment, which cannot be done from out here.
+sandbox_reviewer_env() {
+  local name
+  while IFS= read -r name; do
+    [[ -n ${!name:-} ]] && printf '%s=%s\n' "$name" "${!name}"
+  done < <(sandbox_env_keep)
+  # awk rather than sed: this was first written as a BRE alternation,
+  # \(A\|B\), which is a GNU extension. BSD sed does not implement it and
+  # does not error either -- it matches nothing, so the passthrough silently
+  # dropped every variable it exists to carry. Caught only because the suite
+  # asserts the exception rather than trusting it.
+  while IFS= read -r name; do
+    [[ -n $name ]] && printf '%s=%s\n' "$name" "${!name}"
+  done < <(env | awk -F= '/^(ANTHROPIC|CLAUDE)_[A-Za-z0-9_]*=/ { print $1 }')
+}
+
 # Copy the review assets into the workspace so the reviewer never has to read
 # outside it. Without this, scoping reads to the workspace would deny the
 # reviewer its own skill file, which lives under $HOME.
@@ -505,7 +549,11 @@ printf ' read=%s' '<the first line, or REFUSED>' >> '${inside}'"
   # nothing, and an unquoted one is a word-splitting bug everywhere else.
   local -a probe_tools
   read -r -a probe_tools <<< "$(sandbox_probe_tools)"
-  timeout 120 claude -p "$prompt" \
+  # The same environment the review itself gets, or this would be attesting to
+  # a setup the review does not run in.
+  local -a probe_env=(-i)
+  while IFS= read -r kv; do probe_env+=("$kv"); done < <(sandbox_reviewer_env)
+  env "${probe_env[@]}" timeout 120 claude -p "$prompt" \
     --settings "$settings" --allowed-tools "${probe_tools[@]}" --model haiku \
     < /dev/null > /dev/null 2>&1 || true
 

@@ -205,15 +205,22 @@ main() {
   # `timeout` kills the session with SIGTERM, so nothing is flushed and the log
   # is empty by construction -- "failed or timed out; see the log" then sent the
   # reader to an empty file, which is where this message used to end.
-  # Only when sandboxed: unsandboxed, $HOME is readable, nothing warns, and
-  # these would take the user's own gitignore away from the reviewer for no gain.
-  local -a git_env=()
+  # Only when sandboxed. Unsandboxed the reviewer runs with the user's own
+  # privileges anyway, so an explicit environment would be theatre -- and the
+  # git settings would take the user's own gitignore away for no gain.
+  #
+  # `-i` first: the reviewer gets the keep-list and nothing else, so an
+  # exported GITHUB_TOKEN is not sitting one `printenv` away from a diff that
+  # is untrusted by this script's own doctrine, with github egress open.
+  local -a env_args=()
   if [[ -n $workspace ]]; then
-    while IFS= read -r kv; do git_env+=("$kv"); done < <(reviewer_git_env)
+    env_args=(-i)
+    while IFS= read -r kv; do env_args+=("$kv"); done < <(sandbox_reviewer_env)
+    while IFS= read -r kv; do env_args+=("$kv"); done < <(reviewer_git_env)
   fi
 
   local rc=0
-  (cd "$review_root" && env "${git_env[@]+"${git_env[@]}"}" timeout "$TIMEOUT" claude -p "$(prompt "$review_root" "$base" "$sha" "$assets_root")" \
+  (cd "$review_root" && env "${env_args[@]+"${env_args[@]}"}" timeout "$TIMEOUT" claude -p "$(prompt "$review_root" "$base" "$sha" "$assets_root")" \
     --allowed-tools "${tools[@]}" \
     "${extra_args[@]}" \
     --model "$MODEL") > "$OUT_DIR/reviewer.log" 2>&1 || rc=$?

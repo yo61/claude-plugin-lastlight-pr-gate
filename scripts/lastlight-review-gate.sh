@@ -241,65 +241,138 @@ gh_api_segments() {
 # Gated unless provably a read: no field flags, and either no method at all (gh
 # defaults to GET) or a method that is explicitly GET or HEAD. An unrecognised
 # spelling, a quoted value, or a method nobody has thought of is a write.
+# Whether ONE invocation could change a pull request.
+#
+# Gated unless provably a read: no field flags, and either no method at all (gh
+# defaults to GET) or a method that is explicitly GET or HEAD. An unrecognised
+# spelling, a value this rule has never heard of, or anything it cannot read at
+# all is a write.
+#
+# Judged on the WORDS gh receives. Matching against the raw segment meant this
+# and gh were reading different commands: `"--method" PUT` never string-equals
+# `--method`, `"-ftitle=x"` has a quote where the scan wanted whitespace, and a
+# decoy `-X GET` inside a quoted --jq filter looked like the last method while
+# gh sent the PUT beside it. All three merged pull requests, and all three were
+# denied before the inversion narrowed this rule -- regressions, not gaps.
 gh_api_segment_writes() {
-  local seg=$1 method
+  local seg=$1 w method="" i out
+  local -a words=()
+  # Command substitution, not process substitution: this needs the tokenizer's
+  # exit status. An unterminated quote swallows the rest of the line into one
+  # word -- `gh api 'repos/o/r/pulls/4/merge -X PUT` then carries no `-X` word
+  # at all and scored as a read. Nothing that cannot be tokenized is provably
+  # a read, so it is a write.
+  out=$(gh_api_words "$seg") || return 0
+  if [[ -n $out ]]; then
+    while IFS= read -r w; do words+=("$w"); done <<< "$out"
+  fi
+  local n=${#words[@]}
+  [[ $n -gt 1 ]] || return 1
 
-  grep -Eq '(^|[;|&(])[[:space:]]*gh[[:space:]]+api[^;|&]*(/pulls|repos/[^[:space:]]*/pulls)' \
-    <<< "$seg" || return 1
+  # `gh api`, however the segment reaches it -- behind `sudo`, an env
+  # assignment, an opening paren.
+  local is_api=0
+  for ((i = 0; i + 1 < n; i++)); do
+    if [[ ${words[i]} == gh && ${words[i + 1]} == api ]]; then
+      is_api=1
+      break
+    fi
+  done
+  [[ $is_api -eq 1 ]] || return 1
 
-  # An expansion can be anything, so the scan below is reading a command that
-  # is not the one gh will receive. `gh api repos/o/r/pulls/4/merge $FLAGS`
-  # has no literal flag, scores as method-less, and merges the PR ungated --
-  # the silent-allow failure this rule was inverted to end.
+  # A pulls endpoint, as a whole word. Splitting the literal across a quote
+  # boundary -- `"repos/o/r/pul""ls/4"` -- hid it from the old text match.
+  local names_pulls=0
+  for ((i = 0; i < n; i++)); do
+    case ${words[i]} in
+      */pulls | */pulls/* | pulls | pulls/*)
+        names_pulls=1
+        break
+        ;;
+      *) ;; # not an endpoint word
+    esac
+  done
+  [[ $names_pulls -eq 1 ]] || return 1
+
+  # An expansion can be anything, so the words above are not the ones gh will
+  # get. `gh api repos/o/r/pulls/4/merge $FLAGS` carries no literal flag and
+  # scored as method-less. Quoting does not help: gh takes an attached value,
+  # so a single word `"-XPUT"` is a PUT -- confirmed on the wire,
+  # `gh api repos/cli/cli "-XHEAD"` sent a HEAD request.
   #
-  # Quoting does not help, which is the part worth measuring rather than
-  # assuming: `"$FLAGS"` stays one word, but gh takes an attached value, so
-  # `"-XPUT"` as a single argument is a PUT. Confirmed on the wire against
-  # gh -- `gh api repos/cli/cli "-XHEAD"` sent `HEAD /repos/cli/cli`. (The
-  # separated form `"-X PUT"` does die, at Go's http layer, on the leading
-  # space -- but that is one spelling of several, and spelling-by-spelling is
-  # exactly how this rule failed four times.)
-  #
-  # WHAT THIS STILL DOES NOT COVER, and it is the same shape: an expansion can
-  # hide the ENDPOINT too, and `gh api "repos/o/r/$THING"` never matches the
-  # test above, so it is never examined. Widening the endpoint match to every
-  # `gh api` carrying an expansion would close it and would also gate ordinary
-  # issue and repo reads on every Bash call. That is a change to what this
-  # function is for, and it is left for its own decision rather than folded in
-  # behind a bug fix.
+  # WHAT THIS STILL DOES NOT COVER: an expansion can hide the ENDPOINT too, and
+  # such a segment never matches the test above. Closing that means gating
+  # every `gh api` carrying an expansion, ordinary issue and repo reads
+  # included. That is a change to what this function is for, and is left for
+  # its own decision rather than folded in behind a bug fix.
   grep -q '[$`]' <<< "$seg" && return 0
 
-  # Field flags make gh POST on its own, whatever the method says. `-ftitle=x`
-  # carries its value with no separator, so these are matched on the flag.
-  grep -Eq '(^|[[:space:]])(-[fF]|--field|--raw-field|--input)' <<< "$seg" && return 0
+  # Field flags make gh POST on its own, whatever the method says, and they
+  # take their value attached -- so this matches on the flag, not the word.
+  for ((i = 0; i < n; i++)); do
+    case ${words[i]} in
+      -f* | -F* | --field* | --raw-field* | --input*) return 0 ;;
+      *) ;; # not a field flag
+    esac
+  done
 
-  method=$(gh_api_last_method "$seg")
+  # The method gh would actually use: the LAST one named, or empty if none is.
+  # Asking whether the command mentions GET anywhere was wrong -- gh's parser
+  # takes the last occurrence of a repeated flag, so a throwaway `--method GET`
+  # in front turned every gated write back into a read. Verified on the wire.
+  for ((i = 0; i < n; i++)); do
+    case ${words[i]} in
+      -X | --method) [[ $((i + 1)) -lt $n ]] && method=${words[i + 1]} ;;
+      -X?*) method=${words[i]#-X} ;;
+      --method=*) method=${words[i]#--method=} ;;
+      *) ;; # not a method flag; keep the last one seen
+    esac
+  done
+  method=$(tr '[:lower:]' '[:upper:]' <<< "$method")
+
   [[ -z $method || $method == GET || $method == HEAD ]] && return 1
   return 0
 }
 
-# The method gh would actually use: the LAST one named, or empty if none is.
+# The words a shell would hand gh: quotes removed, split on unquoted
+# whitespace. Same state machine as gh_api_segments, one level down.
 #
-# Asking whether the command mentions GET anywhere was wrong. gh's flag parser
-# takes the last occurrence of a repeated flag, so `--method GET --method PUT`
-# sends a PUT -- and prepending a throwaway `--method GET` turned every gated
-# write back into a read. Verified on the wire, not assumed.
-#
-# Word-based, so the three spellings are handled where they differ rather than
-# by a pattern that has to cover all of them at once: `-X PUT`, `-XPUT` and
-# `--method=PUT`. Quotes are stripped because the shell strips them before gh
-# sees the value.
-gh_api_last_method() {
-  awk '{
-    m = ""
-    for (i = 1; i <= NF; i++) {
-      if ($i == "-X" || $i == "--method") { m = $(i + 1) }
-      else if ($i ~ /^-X./) { m = substr($i, 3) }
-      else if ($i ~ /^--method=/) { m = substr($i, 10) }
+# This is the difference between reading the command and reading the text of
+# the command, and every bypass in this function's history has lived in that
+# gap.
+gh_api_words() {
+  awk '
+    BEGIN { SQ = sprintf("%c", 39) }
+    {
+      w = ""; started = 0; mode = ""
+      n = length($0)
+      for (i = 1; i <= n; i++) {
+        c = substr($0, i, 1)
+        if (mode == "sq") {
+          if (c == SQ) { mode = ""; continue }
+          w = w c; started = 1
+        } else if (mode == "dq") {
+          if (c == "\\" && i < n) { w = w substr($0, ++i, 1); started = 1; continue }
+          if (c == "\"") { mode = ""; continue }
+          w = w c; started = 1
+        } else {
+          if (c == "\\" && i < n) { w = w substr($0, ++i, 1); started = 1; continue }
+          if (c == SQ)   { mode = "sq"; started = 1; continue }
+          if (c == "\"") { mode = "dq"; started = 1; continue }
+          if (c == " " || c == "\t") {
+            if (started) print w
+            w = ""; started = 0
+            continue
+          }
+          w = w c; started = 1
+        }
+      }
+      if (started) print w
+      # Ends inside a quote: the caller cannot treat these words as what gh
+      # would receive, because a shell would not have run this at all.
+      if (mode != "") exit 1
     }
-    gsub(/["'"'"']/, "", m)
-    print toupper(m)
-  }' <<< "$1"
+  ' <<< "$1"
 }
 
 gate_pr_open() {

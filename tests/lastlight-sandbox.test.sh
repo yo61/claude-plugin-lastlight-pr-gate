@@ -425,5 +425,38 @@ ok "after clearing, the prompt path holds the real skill" \
 ok "...and only the real one is staged" \
   "$(find "$SA/.lastlight-assets" -name SKILL.md | grep -c .)" "1"
 
+echo "--- the reviewer gets an environment, not an inheritance ---"
+# The policy denies every file-based credential store so a token cannot leave
+# through the github egress the review deliberately opens. The environment went
+# round all of it: `claude -p` inherited whatever was exported, so `printenv
+# GITHUB_TOKEN` answered inside the sandbox. Not hypothetical -- GITHUB_TOKEN is
+# exported on the machine this was found on.
+tok_env=$(
+  export GITHUB_TOKEN=fake GH_TOKEN=fake NPM_TOKEN=fake AWS_SECRET_ACCESS_KEY=fake
+  sandbox_reviewer_env
+)
+ok "no exported token reaches the reviewer" \
+  "$(grep -cE '^(GITHUB_TOKEN|GH_TOKEN|NPM_TOKEN|AWS_SECRET_ACCESS_KEY)=' <<< "$tok_env" || true)" "0"
+# ...and it is still an environment a process can run in.
+ok "PATH still reaches it" "$(grep -c '^PATH=' <<< "$tok_env" || true)" "1"
+ok "HOME still reaches it" "$(grep -c '^HOME=' <<< "$tok_env" || true)" "1"
+
+# A keep-list, for the reason read_deny_rules gives about reads: a denylist of
+# token-shaped names protects the ones someone thought of.
+ok "the keep-list names no credential variable" \
+  "$(sandbox_env_keep | grep -ciE 'token|secret|password|credential' || true)" "0"
+
+# The documented exception, asserted so it stays visible rather than implied:
+# the session cannot authenticate without these, so scrubbing them would end
+# the review rather than harden it.
+anth_env=$(
+  export ANTHROPIC_API_KEY=fake CLAUDE_CODE_SOMETHING=fake
+  sandbox_reviewer_env
+)
+ok "ANTHROPIC_API_KEY is passed through, deliberately" \
+  "$(grep -c '^ANTHROPIC_API_KEY=' <<< "$anth_env" || true)" "1"
+ok "...and CLAUDE_* with it" \
+  "$(grep -c '^CLAUDE_CODE_SOMETHING=' <<< "$anth_env" || true)" "1"
+
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]

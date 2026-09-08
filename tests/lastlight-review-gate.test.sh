@@ -211,6 +211,36 @@ expect deny "a read chained before a real write" \
 expect deny "a real write chained before a read" \
   'gh api repos/o/r/pulls/4/merge -X PUT ; gh api repos/o/r/pulls -X GET'
 
+# The scan used to match flags against the segment with its quotes still in,
+# while gh parses shell-stripped words -- so the two were reading different
+# commands. Each of these merges or POSTs, and each was DENIED before the
+# inversion narrowed this rule, so they are regressions rather than gaps.
+#
+# A decoy method inside a quoted --jq filter: one word to gh, three to a text
+# scan, and as the last `-X` it won.
+expect deny "a decoy method inside a quoted filter" \
+  "gh api repos/o/r/pulls/4/merge -X PUT --jq 'x -X GET'"
+# The flag itself quoted never string-equalled the flag.
+expect deny "the method flag in quotes" 'gh api "--method" PUT repos/o/r/pulls/4/merge'
+# The field-flag test wanted `-f` straight after whitespace; a quote sat there.
+expect deny "a quoted field flag" 'gh api repos/o/r/pulls "-ftitle=x"'
+# And the endpoint was matched as text, so splitting the literal across a quote
+# boundary meant the segment was never examined at all.
+expect deny "the endpoint split across quotes" 'gh api "repos/o/r/pul""ls/4/merge" -X PUT'
+
+# A quoted filter that names no method is still a read -- the point is to read
+# the words, not to distrust quotes.
+expect allow "a quoted filter naming no method" \
+  "gh api repos/o/r/pulls/4 --jq '.[] | select(.x)  '"
+expect allow "a quoted endpoint on its own" 'gh api "repos/o/r/pulls/4"'
+# A quoted VALUE has to survive tokenisation as its bare self. The scanner this
+# replaced stripped quotes from the method explicitly; now the tokenizer does
+# it, and nothing said so until a mutation that kept the quotes changed no
+# verdict in this suite. `-X 'GET'` is an ordinary way to write a read.
+expect allow "a quoted GET is still a read" "gh api -X 'GET' repos/o/r/pulls"
+expect allow "...double quoted too" 'gh api -X "GET" repos/o/r/pulls'
+expect deny "...and a quoted PUT is still a write" "gh api -X 'PUT' repos/o/r/pulls/4/merge"
+
 # gh does not validate or normalise the method value, and the shell has
 # already collapsed repeated spaces before gh sees the argument -- so these
 # are the same request as the forms above, spelled differently.
