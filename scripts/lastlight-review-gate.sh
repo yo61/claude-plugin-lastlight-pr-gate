@@ -412,6 +412,23 @@ main() {
   cwd=$(jq -r '.cwd // empty' <<< "$payload" 2> /dev/null)
   [[ -n $cmd ]] || allow
 
+  # The shell joins a backslash-newline before it parses, so what gh and git
+  # receive has no continuation in it. Everything below is line-based -- awk
+  # resets per record, grep matches per line -- so a continuation split one
+  # invocation in two and the half carrying the method stopped looking like a
+  # gh call. Verified: `gh api .../merge -X PUT` denied on one line, allowed
+  # across two, and `git \<newline> push origin HEAD` allowed while the
+  # one-line form was denied. That second one predates every rule in this file.
+  #
+  # Joined here rather than inside the gh splitter, because the git scan needs
+  # it too and there is one place where every scan can be given the same
+  # command.
+  #
+  # REMOVED, not replaced with a space: that is what the shell does, and
+  # `-X\<newline>PUT` is the single word `-XPUT`. A space would split a token
+  # the shell keeps whole, which turns a write back into a read.
+  cmd=${cmd//\\$'\n'/}
+
   # FAST PATH: runs on every Bash call, so all git work sits behind this.
   # PR-opening is included as belt-and-braces. Once every push is gated, HEAD
   # always has a marker by the time a PR is opened, so this adds no friction --

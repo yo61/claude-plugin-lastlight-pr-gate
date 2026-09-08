@@ -229,6 +229,35 @@ expect allow "a paren-wrapped read" '(gh api repos/o/r/pulls/4)'
 # nothing: `PUT)` is not GET either way. Here it decides the verdict.
 expect deny "a write whose endpoint ends the paren" '(gh api -X POST repos/o/r/pulls)'
 expect allow "...and the read twin" '(gh api repos/o/r/pulls)'
+
+# The shell removes a backslash-newline before it parses, so what gh receives
+# has no continuation in it. Every scan in this gate is line-based -- awk
+# resets per record, grep matches per line -- so a continuation split one
+# invocation in two and the half carrying the method stopped looking like a gh
+# call at all. Denied on one line, allowed across two.
+NL=$'\n'
+BS=$'\\'
+CONT_M=repos/o/r/pulls/4/merge
+expect deny "a continuation before the method" "gh api $CONT_M ${BS}${NL}  -X PUT"
+expect deny "...between gh and api" "gh ${BS}${NL}  api $CONT_M -X PUT"
+expect deny "...before a field flag" "gh api repos/o/r/pulls ${BS}${NL}  -f title=x"
+# Inside a word, the shell joins with NOTHING: -X<join>PUT is the word -XPUT.
+# Replacing the pair with a space instead would split that token and hand the
+# scan a bare -X with no value.
+expect deny "...inside the flag itself" "gh api $CONT_M -X${BS}${NL}PUT"
+# ...and inside the flag NAME, which is where joining with a space rather than
+# with nothing stops being a detail: `--met<join>hod` is `--method` to the
+# shell and `--met hod` with a space, and the second names no method at all.
+expect deny "...inside the flag name" "gh api $CONT_M --met${BS}${NL}hod PUT"
+# More than one continuation in a single command, so joining just the first
+# leaves the rest splitting the line.
+expect deny "...twice in one command" \
+  "gh ${BS}${NL}  api ${BS}${NL}  $CONT_M -X PUT"
+# The git scan has the same blind spot and predates every gh rule here, which
+# is why the join happens once in main() rather than inside the gh splitter.
+expect deny "a continuation between git and push" "git ${BS}${NL}  push origin HEAD"
+# ...and a read spread over two lines is still a read.
+expect allow "a read over a continuation" "gh api repos/o/r/pulls/4 ${BS}${NL}  --jq .body"
 # Parens inside a quoted jq filter are data, not structure.
 expect allow "parens inside a jq filter" \
   "gh api repos/o/r/pulls/4 --jq '.[] | select(.x)'"
