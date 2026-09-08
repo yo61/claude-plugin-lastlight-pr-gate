@@ -220,5 +220,31 @@ ok "a tracked change is in it" \
 ok "an untracked file is in it" \
   "$([[ $WTD == *new.txt* ]] && echo yes || echo no)" "yes"
 rm -rf "$WTD_HOME" "$(dirname "$WTD_REPO")"
+
+echo "--- tool_rule_rejected: the check must not need an undeclared tool ---"
+TRR=$(mktemp -d)
+printf 'all fine\n' > "$TRR/clean.log"
+printf 'Ignoring --allowedTools rule: bad\n' > "$TRR/rejected.log"
+trr() { tool_rule_rejected "$1" && echo yes || echo no; }
+
+ok "a rejected rule is detected" "$(trr "$TRR/rejected.log")" "yes"
+ok "a clean log is not" "$(trr "$TRR/clean.log")" "no"
+ok "a missing log is not, and does not crash" "$(trr "$TRR/absent.log")" "no"
+
+# The check was written with `rg`, which this script does not require. On a
+# machine without it the command exits 127, the `if` body is skipped, and an
+# under-equipped reviewer still writes an attestation. This asserts the
+# scripts invoke no command they do not declare.
+undeclared_tools() {
+  # Command position only: `Bash(rg:*)` inside a tool rule is a permission
+  # granted to the reviewer, not a dependency of this script. Comment lines are
+  # dropped for the same reason -- prose about ripgrep is not a call to it.
+  local dir
+  dir=$(dirname "$RUN")
+  grep -nE '(^|[;|&(])[[:space:]]*(rg|fd|trash)[[:space:]]' "$dir"/*.sh 2> /dev/null \
+    | grep -v ':[0-9]*:[[:space:]]*#' || true
+}
+ok "no script depends on an undeclared tool" "$(undeclared_tools | wc -l | tr -d ' ')" "0"
+rm -rf "$TRR"
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]

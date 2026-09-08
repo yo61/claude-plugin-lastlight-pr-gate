@@ -212,7 +212,7 @@ main() {
   # A rule the CLI could not parse leaves the reviewer without a tool it needed,
   # and it will carry on and produce a thinner review rather than fail. Treat
   # that as a hard error: a silently under-equipped reviewer is worse than none.
-  if rg -q 'Ignoring --allowedTools rule' "$OUT_DIR/reviewer.log" 2> /dev/null; then
+  if tool_rule_rejected "$OUT_DIR/reviewer.log"; then
     die "the CLI rejected an allowed-tools rule, so the reviewer ran under-equipped; see $OUT_DIR/reviewer.log"
   fi
 
@@ -284,6 +284,19 @@ main() {
 #
 # The same `:(exclude)` pathspec as the dirty-tree check above, for the same
 # reason: the tool's own workspace is not part of the change under review.
+# Whether the CLI rejected an allowed-tools rule, which leaves the reviewer
+# without a tool it asked for.
+#
+# `grep`, not `rg`. This script requires only claude and jq, and on a machine
+# without ripgrep `rg` exits 127 -- the `if` body is skipped, the hard error
+# never fires, and a reviewer that ran under-equipped still writes an
+# attestation that unblocks the push. A safety check that vanishes when an
+# undeclared tool is missing is worse than no check, because it reads as having
+# passed.
+tool_rule_rejected() {
+  grep -q 'Ignoring --allowedTools rule' "$1" 2> /dev/null
+}
+
 working_tree_diff() {
   git diff HEAD -- ':(exclude).lastlight/'
   git ls-files --others --exclude-standard -z -- ':(exclude).lastlight/' \
