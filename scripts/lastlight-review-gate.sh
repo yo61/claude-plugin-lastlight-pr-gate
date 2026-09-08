@@ -275,14 +275,22 @@ shell_segments() {
 # gh sent the PUT beside it. All three merged pull requests, and all three were
 # denied before the inversion narrowed this rule -- regressions, not gaps.
 gh_api_segment_writes() {
-  local seg=$1 w method="" i out
+  local seg=$1 w method="" i out unterminated=0
   local -a words=()
   # Command substitution, not process substitution: this needs the tokenizer's
   # exit status. An unterminated quote swallows the rest of the line into one
   # word -- `gh api 'repos/o/r/pulls/4/merge -X PUT` then carries no `-X` word
-  # at all and scored as a read. Nothing that cannot be tokenized is provably
-  # a read, so it is a write.
-  out=$(gh_api_words "$seg") || return 0
+  # at all and scored as a read.
+  #
+  # Recorded here and acted on BELOW, once this is known to be a gh api call
+  # naming a pulls endpoint. Returning "writes pulls" here judged every line
+  # that ends inside a quote, and the scanners are line-based: a heredoc body
+  # containing an apostrophe, the first line of `git commit -m "$(cat <<'EOF'`,
+  # a two-line double-quoted string. Each denied the whole Bash command, saying
+  # it opened a pull request. `echo "line1<newline>line2"` was denied. This hook
+  # runs on every Bash call, so it blocked the commit that has to happen before
+  # the review that would clear the gate.
+  out=$(gh_api_words "$seg") || unterminated=1
   if [[ -n $out ]]; then
     while IFS= read -r w; do words+=("$w"); done <<< "$out"
   fi
@@ -329,6 +337,11 @@ gh_api_segment_writes() {
     esac
   done
   [[ $names_pulls -eq 1 ]] || return 1
+
+  # NOW the tokenizer's verdict matters. The words above were enough to
+  # recognise the call; nothing after this point can be read off a line that
+  # ends mid-quote, so it is not provably a read.
+  [[ $unterminated -eq 1 ]] && return 0
 
   # An expansion can be anything, so the words above are not the ones gh will
   # get. `gh api repos/o/r/pulls/4/merge $FLAGS` carries no literal flag and

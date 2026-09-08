@@ -81,6 +81,15 @@ expect() { # expect <allow|deny> <label> <command> [cwd]
   fi
 }
 
+# Newline and backslash, spelled once. Cases below build multi-line and
+# continuation commands from these; defined here rather than beside the
+# first section that needs them, so a later section cannot depend on an
+# earlier one's leftovers -- an unset NL under `set -u` would abort, but a
+# reordering that left it empty would quietly turn multi-line cases into
+# single-line ones that pass for the wrong reason.
+NL=$'\n'
+BS=$'\\'
+
 unmark
 echo "--- unreviewed SHA: every push shape is blocked ---"
 expect deny "bare git push" 'git push'
@@ -288,8 +297,6 @@ expect allow "a word that merely starts with pulls" 'gh api repos/o/r/pullsfoo -
 # resets per record, grep matches per line -- so a continuation split one
 # invocation in two and the half carrying the method stopped looking like a gh
 # call at all. Denied on one line, allowed across two.
-NL=$'\n'
-BS=$'\\'
 CONT_M=repos/o/r/pulls/4/merge
 expect deny "a continuation before the method" "gh api $CONT_M ${BS}${NL}  -X PUT"
 expect deny "...between gh and api" "gh ${BS}${NL}  api $CONT_M -X PUT"
@@ -414,6 +421,23 @@ expect allow "gh pr view" 'gh pr view 42'
 expect allow "gh pr diff" 'gh pr diff 42'
 expect allow "ls" 'ls -la'
 expect allow "outside a git repo" 'git push' /tmp
+
+# FALSE POSITIVES, which had no coverage until one of them denied every Bash
+# command in a gated repo. The scanners are line-based, so a line that ends
+# inside a quote is the shape to watch: failing to tokenise it was being scored
+# "writes pulls" before the segment was even checked for being a gh call.
+#
+# This hook runs on every Bash call. A gate that denies ordinary work does not
+# get tightened, it gets turned off -- and the commit it blocked here is the
+# one you have to make before you can run the review that clears it.
+expect allow "a heredoc body with an apostrophe" "cat << EOF${NL}don't${NL}EOF"
+expect allow "a commit message from a heredoc" \
+  "git commit -m \"\$(cat <<'EOF'${NL}subject${NL}EOF${NL})\""
+expect allow "a double-quoted string over two lines" "echo \"line1${NL}line2\""
+expect allow "a python heredoc" "python3 - <<'PY'${NL}print(\"it's fine\")${NL}PY"
+# Prose that merely mentions the endpoint is not a call to it.
+expect allow "a message mentioning pulls" "git commit -m \"fix: gate repos/o/r/pulls writes\""
+expect allow "grepping for the endpoint" "rg 'repos/o/r/pulls' scripts/"
 
 echo "--- new commit re-arms the gate ---"
 mark "$SHA"
