@@ -70,14 +70,39 @@ jobs:
         with:
           persist-credentials: false
 
-      # shellcheck is preinstalled on ubuntu-latest. shfmt is not, and installing
-      # it through Go (also preinstalled) at a pinned version avoids taking on
-      # another action dependency to SHA-pin and keep updated.
+      # shfmt is not preinstalled; installing it through Go (which is) at a
+      # pinned version avoids taking on another action dependency to SHA-pin
+      # and keep updated.
       - name: Install shfmt
         run: |
           set -euo pipefail
           go install mvdan.cc/sh/v3/cmd/shfmt@v3.14.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # shellcheck IS preinstalled, and that was the problem: the runner image
+      # carries whatever version it carries and the local hook used whatever was
+      # installed, so the same construct was reported under different codes --
+      # an uncalled function is SC2329 on 0.11 and SC2317 per body line on
+      # older builds. A disable written against one of them was clean locally
+      # and red here. The version and its checksum live in .shellcheck-version,
+      # which the local hook reads too.
+      - name: Install shellcheck
+        run: |
+          set -euo pipefail
+          . ./.shellcheck-version
+          url=https://github.com/koalaman/shellcheck/releases/download
+          curl -fsSL -o /tmp/shellcheck.tar.xz \
+            "$url/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          echo "${SHELLCHECK_SHA256_LINUX_X86_64}  /tmp/shellcheck.tar.xz" | sha256sum -c -
+          tar -xJf /tmp/shellcheck.tar.xz -C /tmp
+          sudo install -m 0755 \
+            "/tmp/shellcheck-v${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          shellcheck --version
+
+      # Belt and braces: /usr/local/bin must win over the preinstalled copy, or
+      # this job silently goes back to linting with the image's version.
+      - name: shellcheck version matches the pin
+        run: bash tests/shellcheck-version.sh
 
       - name: shellcheck
         run: shellcheck scripts/*.sh tests/*.sh

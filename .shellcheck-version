@@ -1,0 +1,21 @@
+# The shellcheck this project lints with, in one place, read by BOTH the CI
+# workflow and the local prek hook. They used to differ: CI took whatever
+# shipped on the runner image while the hook used whatever was installed
+# locally, and the two reported the same construct differently. A disable
+# written against one of them was green locally and red in CI, and a branch was
+# pushed on the strength of the local run.
+#
+# The two codes are NOT the same check. SC2317 flags a STATEMENT it believes
+# cannot be reached, and fires on genuinely dead code as well. SC2329 flags a
+# FUNCTION DEFINITION that is never invoked. They overlap only here: 0.11
+# introduced SC2329 and narrowed SC2317 so it no longer reports every line
+# inside an uncalled function, where older builds did. So the version decides
+# which one you get, and SC2329 is the narrower disable -- suppressing SC2317
+# in that scope would also hide real unreachable code.
+#
+# Sourced as shell, so it stays readable from both.
+SHELLCHECK_VERSION=0.11.0
+# sha256 of shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz, from the
+# release. Verified before use; a download nobody checks is a dependency that
+# can change under you.
+SHELLCHECK_SHA256_LINUX_X86_64=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198

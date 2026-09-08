@@ -32,6 +32,17 @@ repos:
   # formatting, silently.
   - repo: local
     hooks:
+      # Before shellcheck itself: a clean run from a different build does not
+      # mean what CI's run means, and that difference has already pushed a red
+      # branch. The pinned version lives in .shellcheck-version, which the
+      # workflow installs from.
+      - id: shellcheck-version
+        name: shellcheck version matches the pin
+        entry: bash tests/shellcheck-version.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+
       - id: shellcheck
         name: shellcheck
         entry: shellcheck
