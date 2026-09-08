@@ -227,7 +227,16 @@ gh_api_segments() {
           if (c == "\\" && i < n) { seg = seg c substr($0, ++i, 1); continue }
           if (c == SQ)   { mode = "sq"; seg = seg c; continue }
           if (c == "\"") { mode = "dq"; seg = seg c; continue }
-          if (c == ";" || c == "&" || c == "|") { print seg; seg = ""; continue }
+          if (c == ";" || c == "|") { print seg; seg = ""; continue }
+          if (c == "&") {
+            # Not every & separates. A redirection carries one -- 2>&1, >&2,
+            # <&3, &>out -- and the shell strips it before the command runs,
+            # so splitting there cut the method off a call that still had it.
+            prv = (i > 1) ? substr($0, i - 1, 1) : ""
+            nxt = (i < n) ? substr($0, i + 1, 1) : ""
+            if (prv == ">" || prv == "<" || nxt == ">") { seg = seg c; continue }
+            print seg; seg = ""; continue
+          }
           seg = seg c
         }
       }

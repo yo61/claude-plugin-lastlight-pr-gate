@@ -194,6 +194,23 @@ expect deny "...and double quotes as well" \
   'gh api "repos/o/r/pulls/4/merge?a=1&b=2" -X PUT'
 # An escaped separator is not a separator either.
 expect deny "an escaped separator" 'gh api repos/o/r/pulls/4/merge\;x -X PUT'
+# Not every & separates: a redirection carries one, and the shell strips it
+# before the command runs. Splitting there left `gh api ...merge 2>` -- a pulls
+# call with no method, scored a read -- and `1 -X PUT`, which is not a gh call
+# at all. So the verdict depended on where the redirect sat relative to the
+# method, which is not something the shell cares about. Denied before this rule
+# was narrowed, so a regression; the suite had ;, | and && but no redirect.
+expect deny "a 2>&1 before the method" 'gh api repos/o/r/pulls/4/merge 2>&1 -X PUT'
+expect deny "...the >&2 spelling" 'gh api repos/o/r/pulls/4/merge >&2 -X PUT'
+expect deny "...the &>out spelling" 'gh api repos/o/r/pulls/4/merge &>out -X PUT'
+expect deny "...the <&3 spelling" 'gh api repos/o/r/pulls/4/merge <&3 -X PUT'
+expect deny "...and after the method, as before" 'gh api repos/o/r/pulls/4/merge -X PUT 2>&1'
+# && and a bare & must still separate, or the split stops doing its job.
+expect allow "&& still separates" 'gh api repos/o/r/pulls/4 && echo done'
+expect allow "a background & still separates" 'gh api repos/o/r/pulls/4 & echo done'
+expect deny "...and a write after && is still caught" \
+  'gh api repos/o/r/pulls/4 && gh api repos/o/r/pulls/4/merge -X PUT'
+expect allow "a redirect on a plain read" 'gh api repos/o/r/pulls/4 2>&1'
 # Leaving a quote open must not detach the method: everything stays in one
 # segment, which is the direction this gate errs in.
 expect deny "an unterminated quote" "gh api 'repos/o/r/pulls/4/merge -X PUT"
