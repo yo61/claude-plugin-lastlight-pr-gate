@@ -218,5 +218,40 @@ expect allow "push (gate off)" 'git push'
 expect allow "gh pr create (gate off)" 'gh pr create --fill'
 rm -f "$REPO/.git/lastlight-review-gate-off"
 
+echo "--- nothing reaches a remote from a work workspace ---"
+# The clone's git dir is writable by the session, so a marker in it proves
+# only that something in the sandbox wrote a file. A session could record a
+# review in its own clone and push from there, and the real repository would
+# never see the change -- the step `land` exists to force.
+#
+# `expect` is this suite's helper; a plain comparison needs its own, and the
+# first version of these cases called `ok`, which does not exist here -- so
+# they ran silently and the count never moved.
+same() {
+  local label=$1 got=$2 want=$3
+  if [[ $got == "$want" ]]; then
+    pass=$((pass + 1))
+  else
+    fail=$((fail + 1))
+    printf '  FAIL %s\n    want: %s\n    got:  %s\n' "$label" "$want" "$got"
+  fi
+}
+workspace_on() { printf '%s\n' "/some/real/repo" > "$REPO/.git/lastlight-work-sandbox"; }
+workspace_off() { rm -f "$REPO/.git/lastlight-work-sandbox"; }
+
+SHA=$(git -C "$REPO" rev-parse HEAD)
+workspace_on
+mark "$SHA"
+expect deny "a forged marker does not open the push gate" 'git push origin HEAD'
+expect deny "...nor opening a PR" 'gh pr create --fill'
+# The refusal names the way out rather than only refusing.
+same "the refusal points at land" \
+  "$(jq -n --arg c 'git push origin HEAD' --arg d "$REPO" \
+    '{tool_name:"Bash",cwd:$d,tool_input:{command:$c}}' | "$GATE" | grep -c land)" "1"
+workspace_off
+# ...and with the sentinel gone the same marker works as it always did, so
+# the refusal is about the workspace, not about the marker.
+expect allow "the real repository is unaffected" 'git push origin HEAD'
+unmark
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]

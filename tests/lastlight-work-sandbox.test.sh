@@ -503,5 +503,11 @@ ok "the probe is granted Read" \
   "$(work_probe_tools | grep -c Read)" "1"
 ok "...and the full expected set" \
   "$(work_probe_tools)" "Bash,Write,Read"
+
+echo "--- start marks the clone as a workspace ---"
+# The gate and the recorder both key off this file; without it a workspace
+# is indistinguishable from the repository it came from.
+ok "the sentinel path is inside the clone git dir" \
+  "$(work_sentinel_path /some/ws)" "/some/ws/.git/lastlight-work-sandbox"
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]

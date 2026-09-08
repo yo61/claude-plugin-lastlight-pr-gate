@@ -78,7 +78,17 @@ main() {
   fi
 
   local marker_dir
-  marker_dir="$(git rev-parse --git-dir)/$MARKER_DIR"
+  local gitdir
+  gitdir=$(git rev-parse --git-dir)
+  # A review recorded inside a work clone unlocks nothing that should be
+  # unlocked: the push gate refuses that clone outright, and the marker would
+  # sit in a git dir the session can write. Refusing here stops the ordinary
+  # mistake -- finishing in the workspace and recording there -- at the point it
+  # is made, rather than at the push.
+  if [[ -f "$gitdir/lastlight-work-sandbox" ]]; then
+    die "this is a work sandbox workspace; land the work first, then review and record in the repository it came from"
+  fi
+  marker_dir="$gitdir/$MARKER_DIR"
   mkdir -p "$marker_dir"
   jq -n \
     --arg sha "$sha" \

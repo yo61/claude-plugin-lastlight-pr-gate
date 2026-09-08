@@ -152,5 +152,13 @@ SHARED=$(grep -o "^readonly LASTLIGHT_EXCLUDE=.*" "$(dirname "$RECORD")/lastligh
   | sed "s/^readonly LASTLIGHT_EXCLUDE=//; s/^'//; s/'\$//")
 same "the shared constant is readable" "$([[ -n $SHARED ]] && echo yes || echo no)" "yes"
 same "the recorder uses the same pathspec" "$(grep -c -F -- "$SHARED" "$RECORD")" "1"
+
+echo "--- the recorder refuses inside a work workspace ---"
+# Recording there unlocks nothing that should be unlocked, and the ordinary
+# mistake is to finish in the workspace and record on the spot. Refusing at
+# the point it is made says so; refusing at the push would not explain why.
+printf '%s\n' "/some/real/repo" > "$REPO/.git/lastlight-work-sandbox"
+expect refuse "recording inside a work workspace"
+rm -f "$REPO/.git/lastlight-work-sandbox"
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]

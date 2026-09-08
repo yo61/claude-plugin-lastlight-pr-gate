@@ -232,6 +232,23 @@ work_read_canary() {
   printf '%s/.lastlight-work-read-probe.%s' "$HOME" "$$"
 }
 
+# Marks a clone as a work workspace, so the push gate and the recorder can tell
+# one from the real repository.
+#
+# The file names the repository the workspace was cut from, which is where the
+# review belongs. It lives in the clone's own git dir, which the session can
+# write -- so this stops the ORDINARY path, not a determined one: a session that
+# records a review in its own clone and pushes from there never lands, and the
+# real repository never sees the change. `land` is the only way out.
+#
+# What actually confines a work session is the sandbox: writes are limited to
+# the workspace, and the real repository is denied outright. A marker store the
+# session cannot write at all would close this properly; see the note in the
+# README.
+work_sentinel_path() {
+  printf '%s/.git/%s' "$1" "lastlight-work-sandbox"
+}
+
 # Whether a workspace sits inside a tree the policy denies editing.
 #
 # Changing the default was not enough on its own: any LASTLIGHT_WORK_ROOT can
@@ -489,6 +506,7 @@ cmd_start() {
   sandbox_supported || die "no OS sandbox available here, so the work cannot be confined. Refusing to pretend otherwise."
   workspace_is_denied "$ws" \
     && die "the workspace at $ws sits inside a tree this policy denies editing, so the session could not edit its own files. Point LASTLIGHT_WORK_ROOT somewhere else."
+  printf '%s\n' "$root" > "$(work_sentinel_path "$ws")"
   work_settings_json "$ws" "$root" > "$settings"
 
   if [[ ${LASTLIGHT_WORK_VERIFY:-on} == off ]]; then

@@ -45,6 +45,29 @@ readonly SELF_DIR
 
 readonly MARKER_DIR=lastlight-local-review
 
+# Written into a work clone by lastlight-work-sandbox.sh. A push from there is
+# refused whatever markers it holds: the clone's git dir is writable by the
+# session, so a marker in it proves nothing, and the documented way out of a
+# workspace is `land` -- which fast-forwards into the real repository, where the
+# review is then run and recorded.
+readonly WORK_SENTINEL=lastlight-work-sandbox
+
+work_sandbox_message() {
+  local from
+  from=$(cat "$1/$WORK_SENTINEL" 2> /dev/null || printf 'the real repository')
+  printf '%s' "This is a work sandbox workspace, and nothing reaches a remote from here.
+
+The clone's git dir is writable by this session, so a review recorded in it
+proves nothing about the code -- it proves only that something in the sandbox
+wrote a file. The way out is to land the work and review it where the review
+means something:
+
+  ${SELF_DIR}/lastlight-work-sandbox.sh land
+
+That fast-forwards the branch into ${from}, where the review runs against the
+real repository and the push gate opens for that SHA."
+}
+
 allow() { exit 0; }
 
 deny() {
@@ -218,6 +241,7 @@ gate_pr_open() {
   [[ $gitdir = /* ]] || gitdir="$target/$gitdir"
   [[ -e "$gitdir/lastlight-review-gate-off" ]] && allow
   head=$(git -C "$target" rev-parse HEAD 2> /dev/null) || allow
+  [[ -f "$gitdir/$WORK_SENTINEL" ]] && deny "$(work_sandbox_message "$gitdir")"
   [[ -f "$gitdir/$MARKER_DIR/$head.json" ]] && allow
   deny "$(gate_message "$head" "This opens or un-drafts a PR at ${head:0:12}, which has no local review recorded.")"
 }
@@ -287,6 +311,9 @@ main() {
       # An unresolvable ref means the gate cannot prove the SHA was reviewed.
       # Fail CLOSED -- there is no network excuse here, only an unparsed command.
       deny "$(gate_message "unknown" "Could not resolve '${rev}' to a commit, so this gate cannot confirm what would land remotely.")"
+    fi
+    if [[ -f "$gitdir/$WORK_SENTINEL" ]]; then
+      deny "$(work_sandbox_message "$gitdir")"
     fi
     if [[ ! -f "$gitdir/$MARKER_DIR/$sha.json" ]]; then
       deny "$(gate_message "$sha" "${sha:0:12} (${rev}) has no local review recorded, and pushing it puts an unreviewed SHA on the remote.")"
