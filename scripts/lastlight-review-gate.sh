@@ -95,7 +95,7 @@ resolve_target() {
 
 # Arguments belonging to the `git push`, up to the next command separator.
 push_args() {
-  sed -E -n 's/.*git([[:space:]]+-C[[:space:]]+[^[:space:]]+)?[[:space:]]+push[[:space:]]*([^;&|]*).*/\2/p' <<< "$1" | head -1
+  sed -E -n 's/.*git([[:space:]]+-C[[:space:]]+[^[:space:]]+)?[[:space:]]+push[[:space:]]*([^;&|`]*).*/\2/p' <<< "$1" | head -1
 }
 
 # Local revisions whose commits would land remotely, one per line. Empty output
@@ -254,6 +254,15 @@ shell_segments() {
           # was caught, because there the paren is its own word -- the verdict
           # turned on a space.
           if (c == ";" || c == "|" || c == "(" || c == ")") { print seg; seg = ""; continue }
+          # A backtick is command substitution, so it separates -- `OUT=`git
+          # push origin HEAD`` was otherwise neither matched by the fast path
+          # nor isolated here, and the push ran ungated.
+          #
+          # APPENDED to the segment it ends rather than dropped: the rule that
+          # gates a gh call whose flags arrive from a substitution looks for
+          # this character in the raw segment, and splitting it away would
+          # close one hole while opening that one.
+          if (c == BT) { print seg c; seg = ""; continue }
           if (c == "&") {
             # Not every & separates. A redirection carries one -- 2>&1, >&2,
             # <&3, &>out -- and the shell strips it before the command runs,
@@ -305,7 +314,7 @@ gh_api_segment_writes() {
   # it opened a pull request. `echo "line1<newline>line2"` was denied. This hook
   # runs on every Bash call, so it blocked the commit that has to happen before
   # the review that would clear the gate.
-  out=$(gh_api_words "$seg") || unterminated=1
+  out=$(shell_words "$seg") || unterminated=1
   if [[ -n $out ]]; then
     while IFS= read -r w; do words+=("$w"); done <<< "$out"
   fi
@@ -398,13 +407,18 @@ gh_api_segment_writes() {
   return 0
 }
 
-# The words a shell would hand gh: quotes removed, split on unquoted
+# The words a shell would hand a command: quotes removed, split on unquoted
 # whitespace. Same state machine as shell_segments, one level down.
+#
+# Used by both scans. The git test matched raw text and read the message of
+# `git commit -m "fix: git push origin handling"` as a push, then took the
+# rest of the prose for refspecs and denied fail-closed. A quoted string is
+# ONE word here, so prose cannot look like a command.
 #
 # This is the difference between reading the command and reading the text of
 # the command, and every bypass in this function's history has lived in that
 # gap.
-gh_api_words() {
+shell_words() {
   awk '
     BEGIN { SQ = sprintf("%c", 39); BT = sprintf("%c", 96) }
     {
@@ -503,10 +517,16 @@ main() {
   # always has a marker by the time a PR is opened, so this adds no friction --
   # but it still catches a branch pushed BEFORE this gate existed.
   local opens=0
-  grep -Eq '(^|[;|&(])[[:space:]]*gh[[:space:]]+pr[[:space:]]+(create|ready|reopen)([[:space:]]|$|\))' <<< "$cmd" && opens=1
+  # Same shape, same loosening: `GH_TOKEN=x gh pr create` was not matched either.
+  grep -Eq '(^|[^[:alnum:]_.-])gh[[:space:]]+pr[[:space:]]+(create|ready|reopen)([[:space:]]|$|\)|`)' <<< "$cmd" && opens=1
   gh_api_writes_pulls "$cmd" && opens=1
   local has_push=0
-  grep -Eq '(^|[;|&(])[[:space:]]*git([[:space:]]+-C[[:space:]]+[^[:space:]]+)?[[:space:]]+push([[:space:]]|$|\))' <<< "$cmd" \
+  # A PRE-FILTER only, so it errs loose: the per-segment word test below is what
+  # decides. Anchoring `git` to the start of a line or a separator meant an
+  # assignment or a wrapper in front hid it -- `GIT_TRACE=1 git push origin
+  # HEAD` was never gated, and never had been. Found by a case written for the
+  # command-position check rather than by a review.
+  grep -Eq '(^|[^[:alnum:]_.-])git([[:space:]]+-C[[:space:]]+[^[:space:]]+)?[[:space:]]+push([[:space:]]|$|\)|`)' <<< "$cmd" \
     && has_push=1
   [[ $opens -eq 1 || $has_push -eq 1 ]] || allow
 
@@ -528,12 +548,62 @@ main() {
   local seg prefix=""
   while IFS= read -r seg; do
     prefix="$prefix$seg;"
-    grep -Eq '(^|[[:space:]])git([[:space:]]+-C[[:space:]]+[^[:space:]]+)?[[:space:]]+push([[:space:]]|$)' <<< "$seg" \
-      || continue
+    segment_pushes "$seg" || continue
     gate_push_segment "$seg" "$prefix" "$cwd"
   done < <(shell_segments "$cmd")
 
   allow
+}
+
+# Whether this segment invokes `git push`, judged on the words a shell would
+# produce rather than on the text.
+#
+# The text test matched inside quotes, so
+# `git commit -m "fix: git push origin handling"` read as a push, its message
+# was parsed for refspecs, and the command was denied fail-closed. The base
+# commit allows it; commit-and-push one-liners that mention pushing in the
+# message are ordinary, and this hook runs on every Bash call.
+#
+# A quoted string is one word here, so prose cannot look like a command. An
+# unterminated quote leaves the words unreliable, so it is not read as a push
+# either -- the gh rule treats that case as a write, but here the equivalent
+# would be to deny an ordinary line for being hard to parse.
+segment_pushes() {
+  local seg=$1 w out i
+  local -a words=()
+  out=$(shell_words "$seg") || return 1
+  [[ -n $out ]] || return 1
+  while IFS= read -r w; do words+=("$w"); done <<< "$out"
+
+  # `git` has to be the COMMAND, not an argument to one. `echo git push foo bar`
+  # has those words in it and is not a push -- and the refspecs taken from it
+  # do not resolve, so it denied fail-closed with a message about an unknown
+  # ref. Only assignments and a wrapper may precede it.
+  #
+  # KNOWN GAP: an unusual wrapper with its own arguments -- `sudo -u someone git
+  # push` -- is not recognised, so it is not gated. The alternative is treating
+  # every `git push` anywhere in a line as a command, which is what denied the
+  # echo. Named here rather than left to be rediscovered.
+  local n=${#words[@]} j
+  for ((i = 0; i + 1 < n; i++)); do
+    [[ ${words[i]} == git ]] || continue
+    local command_position=1
+    for ((j = 0; j < i; j++)); do
+      case ${words[j]} in
+        *=*) ;; # VAR=value git push
+        sudo | doas | env | command | exec | nohup | time) ;;
+        *)
+          command_position=0
+          break
+          ;;
+      esac
+    done
+    [[ $command_position -eq 1 ]] || continue
+    [[ ${words[i + 1]} == push ]] && return 0
+    # `git -C <dir> push`
+    [[ ${words[i + 1]} == -C && $((i + 3)) -lt $n && ${words[i + 3]} == push ]] && return 0
+  done
+  return 1
 }
 
 # The verdict for ONE `git push`. Returns 0 when that push lands nothing or is

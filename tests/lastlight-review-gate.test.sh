@@ -105,6 +105,12 @@ expect deny "subshell (cd && push)" "(cd $REPO && git push)" "$OUTSIDE"
 # `OUT="$(git push ...)"` is simply how output is captured, and it was allowed.
 expect deny "a push inside a quoted substitution" 'echo "$(git push origin HEAD)"'
 expect deny "...assigned to a variable" 'OUT="$(git push origin HEAD)"'
+# ...and the older spelling of the same capture. The fast-path anchor class had
+# no backtick in it and the segmenter split on backticks only inside double
+# quotes, so this was neither matched nor isolated.
+expect deny "a push in backticks" 'OUT=`git push origin HEAD`'
+expect deny "...bare" '`git push origin HEAD`'
+expect deny "...inside double quotes" 'echo "`git push origin HEAD`"'
 expect deny "git -C repo push" "git -C $REPO push" "$OUTSIDE"
 expect deny "push after a commit" 'git commit -m x && git push'
 
@@ -471,6 +477,19 @@ expect allow "a python heredoc" "python3 - <<'PY'${NL}print(\"it's fine\")${NL}P
 # Prose that merely mentions the endpoint is not a call to it.
 expect allow "a message mentioning pulls" "git commit -m \"fix: gate repos/o/r/pulls writes\""
 expect allow "grepping for the endpoint" "rg 'repos/o/r/pulls' scripts/"
+# The push test used to match raw text, so a commit message mentioning pushing
+# was read as a push, its words taken for refspecs, and the line denied
+# fail-closed with a message about an unresolvable ref. Commit-and-push
+# one-liners are ordinary, and this repository's own messages say things like
+# "a PR-open must not answer for a push".
+expect allow "a commit message that mentions pushing" \
+  'git commit -m "fix: git push origin handling"'
+# `git` has to be the command, not an argument to one.
+expect allow "prose in an echo" 'echo git push foo bar'
+# ...while the forms that really are commands still gate. An assignment or a
+# wrapper in front does not stop it being a push.
+expect deny "an assignment before it" 'GIT_TRACE=1 git push origin HEAD'
+expect deny "a wrapper before it" 'env git push origin HEAD'
 
 echo "--- new commit re-arms the gate ---"
 mark "$SHA"
