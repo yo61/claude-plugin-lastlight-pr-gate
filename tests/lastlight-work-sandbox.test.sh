@@ -384,16 +384,22 @@ ok "a sibling starting with two dots is enumerated" \
 ok "neither . nor .. is enumerated" \
   "$(fake_siblings | grep -cE '/\.\.?$')" "0"
 
-# ...and under the OLD bash too, which is where it matters. bash 5.2 added
-# GLOBSKIPDOTS, so `..*` never yields `..` there and this suite cannot see
-# the difference; the macOS system bash is 3.2, where it does. The hook runs
-# under whichever bash `env bash` finds, which is not necessarily this one.
-if [[ -x /bin/bash ]] && ! /bin/bash -c 'shopt -q globskipdots' 2> /dev/null; then
-  ok "nor under a bash without GLOBSKIPDOTS" \
-    "$(HOME="$FAKE" LASTLIGHT_WORK_ROOT="$FAKE/.lastlight/work" \
-      /bin/bash -c 'source "$1" 2>/dev/null; home_siblings_denied "" "$2"' _ "$WORK" "$MYWS" \
-      | grep -cE '/\.\.?$')" "0"
-fi
+# ...and under the oldest bash available, which is where it matters. bash 5.2
+# added GLOBSKIPDOTS, so `..*` never yields `..` there and a suite running on
+# it cannot tell the correct glob from the greedy one; the macOS system bash
+# is 3.2, where it can. The hook runs under whichever bash `env bash` finds.
+#
+# Run UNCONDITIONALLY, on /bin/bash when there is one. A case that runs only
+# on some machines makes the suite's own count vary by machine, and this repo
+# checks that count -- CI reported one fewer assertion than this machine and
+# failed on the mismatch, not on anything being wrong.
+OLDSH=/bin/bash
+[[ -x $OLDSH ]] || OLDSH=$(command -v bash)
+# shellcheck disable=SC2016  # $1 and $2 belong to the inner shell, not this one
+ok "nor under the oldest bash to hand" \
+  "$(HOME="$FAKE" LASTLIGHT_WORK_ROOT="$FAKE/.lastlight/work" \
+    "$OLDSH" -c 'source "$1" 2>/dev/null; home_siblings_denied "" "$2"' _ "$WORK" "$MYWS" \
+    | grep -cE '/\.\.?$')" "0"
 # ...and the chain down to the kept workspace is not denied, or the session
 # could not reach its own tree.
 ok "the chain to the workspace is open" \
