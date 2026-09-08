@@ -310,5 +310,34 @@ ok "the probe is granted Read" \
   "$(sandbox_probe_tools | grep -c Read)" "1"
 ok "...and the full expected set" \
   "$(sandbox_probe_tools)" "Bash Read"
+
+echo "--- the workspace must not carry the last review in with it ---"
+# reviewer.log is never removed between runs, so on the documented
+# run-it-again workflow the next session could read the previous one's whole
+# transcript and reasoning -- an independent pass that is not independent.
+#
+# HOME is pointed at an empty directory for the git calls: --exclude-standard
+# reads the global gitignore, and this machine's covers .lastlight/, so the
+# leak does not happen here and does everywhere else.
+LK_HOME=$(mktemp -d)
+LK=$(mktemp -d)/repo
+mkdir -p "$LK/.lastlight/pr-review"
+git -C "$LK" init -q -b main 2> /dev/null || git init -q -b main "$LK"
+git -C "$LK" config user.email p@example.com
+git -C "$LK" config user.name p
+printf 'one\n' > "$LK/f.txt"
+git -C "$LK" add f.txt
+git -C "$LK" commit -qm init
+printf 'two\n' > "$LK/f.txt"
+printf 'PRIOR-TRANSCRIPT\n' > "$LK/.lastlight/pr-review/reviewer.log"
+
+LKWS=$(cd "$LK" && HOME=$LK_HOME sandbox_make_working_workspace "$LK")
+ok "the previous reviewer.log is not carried in" \
+  "$([[ -e $LKWS/.lastlight/pr-review/reviewer.log ]] && echo carried || echo absent)" "absent"
+# ...and the change under review still is, or the exclusion took the subject
+# with it.
+ok "the uncommitted change is still there" \
+  "$(count_matching two "$LKWS/f.txt")" "1"
+rm -rf "$LK_HOME" "$(dirname "$LK")" "$(dirname "$LKWS")"
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]

@@ -128,5 +128,29 @@ echo uncommitted >> "$REPO/f.txt"
 expect refuse "uncommitted changes outside .lastlight/"
 git -C "$REPO" checkout -q -- f.txt
 
+echo "--- the exclusion pathspec must match the shared one ---"
+# This script sources nothing: the recorder has to work without the sandbox
+# machinery, so it carries its own copy of the pathspec. That is exactly the
+# drift that let a previous review's artefacts into the next review's
+# workspace, so the copy is checked against the definition rather than kept
+# in step by hand.
+#
+# `expect` runs the recorder; these compare strings, so they need their own.
+same() {
+  local label=$1 got=$2 want=$3
+  if [[ $got == "$want" ]]; then
+    pass=$((pass + 1))
+  else
+    fail=$((fail + 1))
+    printf '  FAIL %s\n    want: %s\n    got:  %s\n' "$label" "$want" "$got"
+  fi
+}
+
+# grep, not rg: this suite must not depend on a tool the plugin does not
+# require, which is a bug already fixed once in the runner.
+SHARED=$(grep -o "^readonly LASTLIGHT_EXCLUDE=.*" "$(dirname "$RECORD")/lastlight-sandbox.sh" \
+  | sed "s/^readonly LASTLIGHT_EXCLUDE=//; s/^'//; s/'\$//")
+same "the shared constant is readable" "$([[ -n $SHARED ]] && echo yes || echo no)" "yes"
+same "the recorder uses the same pathspec" "$(grep -c -F -- "$SHARED" "$RECORD")" "1"
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]

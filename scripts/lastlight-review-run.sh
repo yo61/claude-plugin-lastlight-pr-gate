@@ -118,7 +118,7 @@ main() {
   # `base...HEAD` (committed) while the reviewer reads files from the live
   # working tree (uncommitted). Checking here makes "reviews run against
   # committed code" true rather than true-by-convention.
-  if [[ $WORKING_TREE -eq 0 && -n $(git status --porcelain -- ':(exclude).lastlight/') ]]; then
+  if [[ $WORKING_TREE -eq 0 && -n $(git status --porcelain -- "$LASTLIGHT_EXCLUDE") ]]; then
     die "the working tree has uncommitted changes outside .lastlight/. The diff under review is base...HEAD, but the reviewer reads the live tree, so the two would disagree. Commit or stash first, or pass --working-tree to review the uncommitted state itself."
   fi
 
@@ -303,8 +303,8 @@ tool_rule_rejected() {
 }
 
 working_tree_diff() {
-  git diff HEAD -- ':(exclude).lastlight/'
-  git ls-files --others --exclude-standard -z -- ':(exclude).lastlight/' \
+  git diff HEAD -- "$LASTLIGHT_EXCLUDE"
+  git ls-files --others --exclude-standard -z -- "$LASTLIGHT_EXCLUDE" \
     | xargs -0 -I{} git diff --no-index -- /dev/null {} 2> /dev/null || true
 }
 

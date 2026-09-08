@@ -47,6 +47,20 @@ set -euo pipefail
 # here. It matters most in the work sandbox, which deliberately opens egress to
 # github.com so builds can fetch -- exactly the route a token read from an
 # unprotected file would leave by.
+# The tool's own workspace, which is never part of the change under review.
+#
+# Defined here because every script that touches the working tree needs it and
+# they kept getting it one at a time: the diff builder excluded it and the
+# workspace builder beside it did not, so a previous run's reviewer.log and
+# dismissed.json were copied into the tree the next reviewer explores -- an
+# "independent" pass reading the last one's transcript and reasoning, which is
+# the very thing the `rm -f` at the start of a run exists to prevent.
+#
+# Invisible on a machine whose global gitignore covers `.lastlight/`, which is
+# why it survived: `--exclude-standard` reads that file, so the leak does not
+# happen for the author and does happen for everyone else.
+readonly LASTLIGHT_EXCLUDE=':(exclude).lastlight/'
+
 sandbox_denied_reads() {
   printf '%s\n' \
     "$HOME/.ssh" "$HOME/.aws" "$HOME/.gnupg" "$HOME/.netrc" \
@@ -228,7 +242,7 @@ sandbox_make_working_workspace() {
   # no patch data and `git apply` refuses the whole thing -- taking down the
   # working-tree review the README presents as the primary way to review before
   # committing. One changed image anywhere in the repository was enough.
-  git -C "$root" diff --binary HEAD > "$patch"
+  git -C "$root" diff --binary HEAD -- "$LASTLIGHT_EXCLUDE" > "$patch"
   if [[ -s $patch ]]; then
     git -C "$ws" apply "$patch" 2> /dev/null \
       || die "could not apply the uncommitted changes to the isolated workspace"
@@ -254,7 +268,7 @@ sandbox_make_working_workspace() {
       || die "could not create a directory for untracked '$f' in the isolated workspace"
     cp -RP -- "$root/$f" "$ws/$f" \
       || die "could not copy untracked '$f' into the isolated workspace"
-  done < <(git -C "$root" ls-files --others --exclude-standard -z)
+  done < <(git -C "$root" ls-files --others --exclude-standard -z -- "$LASTLIGHT_EXCLUDE")
   printf '%s' "$ws"
 }
 
