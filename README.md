@@ -154,6 +154,19 @@ success. A *review* session never noticed, because it is given `Read`/`Grep`/
 `Glob`/`Bash` and no way to write — but a work session lives on `Write` and
 `Edit`, so for it the filesystem sandbox alone is not a boundary at all.
 
+Neither layer confines the **environment**, and both columns above are about
+files. A work session inherits the environment it was started from, so an
+exported `GITHUB_TOKEN`, `GH_TOKEN` or `NPM_TOKEN` is one `printenv` away from
+any process in it — and `github.com` is on that session's egress allowlist. The
+denied credential *files* are the same secret by another route; denying the file
+and inheriting the variable protects nothing on its own.
+
+The review session does close this: it is launched with `env -i` and an explicit
+keep-list (`sandbox_env_keep`), so nothing but configuration reaches it. The work
+session does not, deliberately — it is interactive, and taking its environment
+away changes how the tools the person is using behave. If that trade is wrong
+for you, unset the tokens before `start`.
+
 Two spellings matter, and both fail **silently** when wrong:
 
 - `Edit(...)` rules cover every file-editing tool. `Write(...)` rules are not
@@ -270,7 +283,7 @@ for t in tests/*.test.sh; do bash "$t"; done
 
 | suite | cases | covers |
 |---|---|---|
-| `lastlight-review-gate.test.sh` | 152 | what is gated, what is allowed through |
+| `lastlight-review-gate.test.sh` | 160 | what is gated, what is allowed through |
 | `lastlight-review-record.test.sh` | 13 | the pass bar and the attestation binding |
 | `lastlight-review-run.test.sh` | 70 | flag parsing, the prompt, the defaults, the tool allowlist, and what may cross back out of the sandbox |
 | `lastlight-sandbox.test.sh` | 101 | review isolation, the containment verdict, and what the branch may not own |

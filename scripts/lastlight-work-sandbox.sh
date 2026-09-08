@@ -520,6 +520,17 @@ cmd_start() {
   printf 'workspace: %s\n' "$ws" >&2
   printf 'land it with: lastlight-work-sandbox.sh land -b %s\n\n' "$branch" >&2
   cd "$ws"
+  # WHAT THIS DOES NOT CONFINE: the environment. The session inherits it whole,
+  # so an exported GITHUB_TOKEN is one `printenv` away from anything running in
+  # here -- and github.com is on this policy's egress allowlist while Bash is
+  # auto-approved. The credential FILES are denied for exactly that route; the
+  # variables carrying the same secrets are not.
+  #
+  # The review runner closes this with `env -i` and sandbox_env_keep. This one
+  # does not, and the reason is that it is interactive: scrubbing the
+  # environment of a session someone is working in changes how their own tools
+  # behave, which is a decision for them and not a side effect of hardening the
+  # review path. Unset the tokens before `start` if you want it closed.
   exec claude --settings "$settings" "$@"
 }
 

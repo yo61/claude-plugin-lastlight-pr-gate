@@ -185,12 +185,17 @@ gh_api_writes_pulls() {
     # loop body entirely -- so an unchained command, the common case, was never
     # examined at all. The trailing newline is what makes the last segment a
     # line like any other.
-  done < <(gh_api_segments "$cmd")
+  done < <(shell_segments "$cmd")
   return 1
 }
 
-# One line per shell segment, splitting on `;`, `&` and `|` only where the
-# shell would: outside quotes, unescaped.
+# One line per shell segment, splitting on `;`, `&`, `|` and parens only
+# where the shell would: outside quotes, unescaped.
+#
+# Used by both scans. It was written for the gh rule and named for it, and
+# then the git rule turned out to need exactly the same thing -- `git push
+# origin HEAD ; git push --dry-run` had one invocation speaking for the
+# other, which is the bug the gh rule had already been through.
 #
 # `tr ';&|' '\n'` split everywhere, and a separator inside a quoted endpoint cut
 # the method away from the invocation carrying it --
@@ -205,7 +210,7 @@ gh_api_writes_pulls() {
 # An unterminated quote yields ONE segment: everything stays together, so a
 # method cannot be detached from its endpoint by leaving a quote open. That is
 # the direction this gate errs in.
-gh_api_segments() {
+shell_segments() {
   awk '
     BEGIN { SQ = sprintf("%c", 39) }
     {
@@ -362,7 +367,7 @@ gh_api_segment_writes() {
 }
 
 # The words a shell would hand gh: quotes removed, split on unquoted
-# whitespace. Same state machine as gh_api_segments, one level down.
+# whitespace. Same state machine as shell_segments, one level down.
 #
 # This is the difference between reading the command and reading the text of
 # the command, and every bypass in this function's history has lived in that
@@ -448,42 +453,72 @@ main() {
   local opens=0
   grep -Eq '(^|[;|&(])[[:space:]]*gh[[:space:]]+pr[[:space:]]+(create|ready|reopen)([[:space:]]|$|\))' <<< "$cmd" && opens=1
   gh_api_writes_pulls "$cmd" && opens=1
-  if [[ $opens -eq 0 ]]; then
-    grep -Eq '(^|[;|&(])[[:space:]]*git([[:space:]]+-C[[:space:]]+[^[:space:]]+)?[[:space:]]+push([[:space:]]|$|\))' <<< "$cmd" || allow
-  fi
-
-  local args
-  args=$(push_args "$cmd")
+  local has_push=0
+  grep -Eq '(^|[;|&(])[[:space:]]*git([[:space:]]+-C[[:space:]]+[^[:space:]]+)?[[:space:]]+push([[:space:]]|$|\))' <<< "$cmd" \
+    && has_push=1
+  [[ $opens -eq 1 || $has_push -eq 1 ]] || allow
 
   if [[ $opens -eq 1 ]]; then
     gate_pr_open "$cmd" "$cwd"
   fi
+  [[ $has_push -eq 1 ]] || allow
 
-  # A dry run sends nothing at all, from anywhere, so it is decided before any
-  # repository state is looked at.
-  grep -Eq '(^|[[:space:]])--dry-run([[:space:]]|$)' <<< "$args" && allow
+  # PER INVOCATION, for the reason gh_api_writes_pulls already splits: the
+  # arguments were read out of the whole command line, so
+  # `git push origin HEAD ; git push --dry-run` had the dry run's flags stand
+  # in for both pushes and the real one went out. Verified -- denied alone,
+  # allowed chained -- and the same chain walked past the work sentinel.
+  # The segment carries the push's own flags; the PREFIX carries where it runs.
+  # `cd repo && git push` puts the cd in a different segment, so a push judged
+  # on its segment alone lost its target and fell back to the hook's cwd. The
+  # prefix is everything up to and including this segment, which also means
+  # `cd a && push ; cd b && push` resolves each to its own directory rather
+  # than both to whichever cd the whole line happened to mention last.
+  local seg prefix=""
+  while IFS= read -r seg; do
+    prefix="$prefix$seg;"
+    grep -Eq '(^|[[:space:]])git([[:space:]]+-C[[:space:]]+[^[:space:]]+)?[[:space:]]+push([[:space:]]|$)' <<< "$seg" \
+      || continue
+    gate_push_segment "$seg" "$prefix" "$cwd"
+  done < <(shell_segments "$cmd")
 
-  local target gitdir
-  target=$(resolve_target "$cmd" "$cwd")
-  [[ -n $target && -d $target ]] || allow
-  gitdir=$(git -C "$target" rev-parse --git-dir 2> /dev/null) || allow
+  allow
+}
+
+# The verdict for ONE `git push`. Returns 0 when that push lands nothing or is
+# fully reviewed; denies, and so exits, otherwise.
+#
+# Every "nothing lands" case here returns rather than calling `allow`. An allow
+# ends the hook for the whole command line, and that is precisely how a dry run
+# chained after a real push came to speak for it.
+gate_push_segment() {
+  local seg=$1 prefix=$2 cwd=$3 args target gitdir
+
+  args=$(push_args "$seg")
+
+  # A dry run sends nothing, so it needs no repository state -- but it says so
+  # only about ITSELF.
+  grep -Eq '(^|[[:space:]])--dry-run([[:space:]]|$)' <<< "$args" && return 0
+
+  target=$(resolve_target "$prefix" "$cwd")
+  [[ -n $target && -d $target ]] || return 0
+  gitdir=$(git -C "$target" rev-parse --git-dir 2> /dev/null) || return 0
   [[ $gitdir = /* ]] || gitdir="$target/$gitdir"
-  [[ -e "$gitdir/lastlight-review-gate-off" ]] && allow
+  [[ -e "$gitdir/lastlight-review-gate-off" ]] && return 0
 
-  # BEFORE the nothing-lands allows, which is where this used to sit behind.
-  # The sentinel says nothing reaches a remote from a work workspace, and the
-  # allows below were letting two things through that do: a deletion removes a
-  # remote branch, and a tag push uploads the tagged commit with its whole
-  # history -- so tagging the clone's HEAD and pushing the tag lands unreviewed
-  # code with no marker and no `land`. "A tag-only push lands nothing new" holds
-  # for a repository whose commits arrived through reviewed pushes; a work
-  # clone has its own.
+  # BEFORE the nothing-lands returns. The sentinel says nothing reaches a
+  # remote from a work workspace, and those returns were letting two things
+  # through that do: a deletion removes a remote branch, and a tag push uploads
+  # the tagged commit with its whole history -- so tagging the clone's HEAD and
+  # pushing the tag lands unreviewed code with no marker and no `land`. "A
+  # tag-only push lands nothing new" holds for a repository whose commits
+  # arrived through reviewed pushes; a work clone has its own.
   [[ -f "$gitdir/$WORK_SENTINEL" ]] && deny "$(work_sandbox_message "$gitdir")"
 
   # Nothing lands: deletions and tag-only pushes.
-  grep -Eq '(^|[[:space:]])(--delete|-d)([[:space:]]|$)' <<< "$args" && allow
+  grep -Eq '(^|[[:space:]])(--delete|-d)([[:space:]]|$)' <<< "$args" && return 0
   if grep -Eq '(^|[[:space:]])--tags([[:space:]]|$)' <<< "$args"; then
-    [[ -z $(pushed_revs "$args") ]] && allow
+    [[ -z $(pushed_revs "$args") ]] && return 0
   fi
 
   # `--all` / `--mirror` push a set this cannot enumerate from the command line.
@@ -500,7 +535,7 @@ main() {
   else
     real=$(grep -v '^-$' <<< "$revs" || true)
     # Every explicit ref was a tag or a deletion -- nothing new lands.
-    [[ -n $real ]] || allow
+    [[ -n $real ]] || return 0
     revs=$real
   fi
 
@@ -512,18 +547,17 @@ main() {
       # Fail CLOSED -- there is no network excuse here, only an unparsed command.
       deny "$(gate_message "unknown" "Could not resolve '${rev}' to a commit, so this gate cannot confirm what would land remotely.")"
     fi
-    # No sentinel check here. The identical one on the same $gitdir runs
-    # unconditionally above the nothing-lands allows, and `deny` exits -- so a
-    # copy in this loop could never fire and no test could reach it. Left over
-    # from moving that check up. sandbox_probe_verdict says why this matters:
-    # a redundant check in a security control cannot be tested, so it rots
-    # while reading as defence in depth.
+    # No sentinel check here. The one above runs before any of the
+    # nothing-lands returns and `deny` exits, so a copy in this loop could
+    # never fire and no test could reach it. sandbox_probe_verdict says why
+    # that matters: a redundant check in a security control cannot be tested,
+    # so it rots while reading as defence in depth.
     if [[ ! -f "$gitdir/$MARKER_DIR/$sha.json" ]]; then
       deny "$(gate_message "$sha" "${sha:0:12} (${rev}) has no local review recorded, and pushing it puts an unreviewed SHA on the remote.")"
     fi
   done <<< "$revs"
 
-  allow
+  return 0
 }
 
 gate_message() {

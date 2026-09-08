@@ -100,6 +100,20 @@ expect allow "tags only" 'git push --tags'
 expect allow "single tag refspec" 'git push origin refs/tags/v1'
 expect allow "dry run" 'git push --dry-run'
 
+# ...but only about the push carrying the flag. The arguments used to be read
+# out of the whole command line, so the dry run's flags stood in for both
+# pushes here and the real one went out -- the same "a real write cancelled by
+# an unrelated read chained after it" the gh rule was already fixed for.
+expect deny "a real push, then a dry run" 'git push origin HEAD ; git push --dry-run'
+expect deny "...the dry run first" 'git push --dry-run ; git push origin HEAD'
+expect deny "...a deletion after a real push" 'git push origin HEAD ; git push origin --delete tmp'
+expect deny "...a deletion before one" 'git push origin --delete tmp ; git push origin HEAD'
+expect deny "...a tag push alongside" 'git push --tags ; git push origin HEAD'
+expect deny "...chained with &&" 'git push origin HEAD && git push --dry-run'
+# Two pushes that both land nothing are still allowed: what changed is that
+# each invocation answers for itself, not that chaining is suspicious.
+expect allow "two harmless pushes" 'git push --dry-run ; git push origin --delete tmp'
+
 echo "--- redirections are not refs ---"
 mark "$SHA"
 expect allow "push 2>&1 | tail" 'git push 2>&1 | tail -8'
@@ -453,6 +467,10 @@ expect deny "...nor an explicit tag ref" 'git push origin refs/tags/v9'
 # A dry run genuinely sends nothing, from anywhere, so it stays allowed --
 # refusing it would buy no safety and would just be in the way.
 expect allow "a dry run is still fine" 'git push --dry-run'
+# ...and a dry run chained after a real push does not make the real one fine
+# either. This is how the sentinel was cleared before each push was judged on
+# its own.
+expect deny "a real push hidden behind a dry run" 'git push origin HEAD ; git push --dry-run'
 workspace_off
 
 # ...and outside a workspace they are all still allowed, so what changed is
