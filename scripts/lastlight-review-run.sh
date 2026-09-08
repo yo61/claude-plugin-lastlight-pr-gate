@@ -351,6 +351,14 @@ review_tools() {
   # NOT match (verified: the reviewer was then unable to write its own findings,
   # which would have failed every run closed); the absolute form needs a `//`
   # prefix. The relative form sidesteps that entirely.
+  #
+  # The PROMPT names the same relative path, and must keep doing so. It asked
+  # for an absolute one, which this rule does not match -- survivable while
+  # sandboxed, because Bash is granted there and the reviewer could write the
+  # file another way, and fatal in the unsandboxed fallback, where the tool list
+  # is the whole boundary and Write is the only way through. The run would spend
+  # the review and then fail for want of a findings file, on exactly the
+  # platforms that have no sandbox to fall back from.
   REVIEW_TOOLS+=("Edit(${OUT_DIR}/findings.json)" "Write(${OUT_DIR}/findings.json)")
 }
 
@@ -422,7 +430,8 @@ Context for the review:
 Read the diff, then read the surrounding code in this checkout to judge it —
 never assume a hunk is correct because it looks self-consistent.
 
-Write your result to ${root}/${OUT_DIR}/findings.json in the skill's schema
+Write your result to ${OUT_DIR}/findings.json -- that exact relative path,
+from the repository root you are already in -- in the skill's schema
 (skip? / summary / event / findings[]). An empty findings array is a valid
 outcome when the falsifying looks came up empty — but it must be earned, not
 assumed. Report Critical and Important findings only.

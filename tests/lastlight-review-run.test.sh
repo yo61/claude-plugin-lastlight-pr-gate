@@ -246,5 +246,25 @@ undeclared_tools() {
 }
 ok "no script depends on an undeclared tool" "$(undeclared_tools | wc -l | tr -d ' ')" "0"
 rm -rf "$TRR"
+
+echo "--- the prompt and the write rule must name the same path ---"
+# They are set in two places and only work together. The prompt asked for an
+# absolute path while the rule grants a relative one, which the rule does not
+# match. Sandboxed that survived, because Bash is granted there and the
+# reviewer could write the file another way; in the unsandboxed fallback the
+# tool list IS the boundary, so the run spent the review and then failed for
+# want of a findings file -- on exactly the platforms with no sandbox.
+PROMPT=$(prompt /some/root origin/main deadbeef /some/assets)
+review_tools ''
+WRULE=$(printf "%s\n" "${REVIEW_TOOLS[@]}" | grep -m1 "^Write(")
+WPATH=${WRULE#Write(}
+WPATH=${WPATH%)}
+
+ok "the rule is relative" "$([[ $WPATH == /* ]] && echo absolute || echo relative)" "relative"
+ok "the prompt names that exact path" \
+  "$([[ $PROMPT == *"to $WPATH"* ]] && echo yes || echo no)" "yes"
+# ...and not the absolute form, which the rule would not match.
+ok "the prompt does not ask for an absolute write" \
+  "$([[ $PROMPT == *"/some/root/$WPATH"* ]] && echo yes || echo no)" "no"
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]
