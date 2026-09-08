@@ -491,6 +491,46 @@ expect allow "prose in an echo" 'echo git push foo bar'
 expect deny "an assignment before it" 'GIT_TRACE=1 git push origin HEAD'
 expect deny "a wrapper before it" 'env git push origin HEAD'
 
+# awk resets its state at every record and the shell carries quote state across
+# newlines, so the closing quote of a two-line string was read as an OPENING
+# one -- everything after it sat in an unterminated quote and was never
+# examined. The command is parsed as a single buffer now, with a newline
+# separating only outside quotes, which is what it does.
+expect deny "a push after a two-line string" "echo \"a${NL}b\" ; git push origin HEAD"
+expect deny "...and a gh write after one" \
+  "echo \"a${NL}b\" ; gh api repos/o/r/pulls/4/merge -X PUT"
+expect allow "...while the two-line string alone is fine" "echo \"a${NL}b\""
+# A newline IS the separator when there is no `;` -- two commands on two lines.
+# Without it the whole thing is one segment, `git` follows `echo hi`, and the
+# command-position test correctly says that is not a command. Mutation testing
+# found this: removing the newline from the separator set moved no assertion.
+expect deny "a push on its own line" "echo hi${NL}git push origin HEAD"
+expect deny "...and a gh write on its own line" \
+  "echo hi${NL}gh api repos/o/r/pulls/4/merge -X PUT"
+expect allow "...two harmless lines" "echo hi${NL}echo there"
+# A newline INSIDE quotes is text, and the caller reads segments a line at a
+# time -- so emitting one let `read` split a command the shell keeps whole, and
+# the halves parsed as an unterminated quote rather than as a push. Carried
+# through as a space now, so awk alone decides where a segment ends.
+expect deny "a push whose argument spans a newline" "git push \"a${NL}b\""
+
+# The PR-open test on words rather than text, for the same reasons as the push
+# one: an assignment in front, or a quoted subcommand, hid it from a grep.
+expect deny "an assignment before gh pr create" 'GH_TOKEN=x gh pr create --fill'
+expect deny "...a quoted subcommand" 'gh "pr" create --fill'
+
+# Keywords and group openers introduce a command as legitimately as a wrapper.
+expect deny "a push inside if/then" 'if true; then git push origin HEAD; fi'
+expect deny "...inside a brace group" '{ git push origin HEAD ; }'
+expect deny "...inside a while loop" 'while true; do git push origin HEAD; done'
+
+# The text pre-filter decided whether the word test ran, and the two disagreed:
+# these are pushes to the shell and prose to a grep, so they never reached the
+# words that recognise them. There is no text pre-filter any more.
+expect deny "a quoted subcommand" 'git "push" origin HEAD'
+expect deny "...quoted mid-word" 'git pu"sh" origin HEAD'
+expect deny "...with an escape in it" 'git pus\h origin HEAD'
+
 echo "--- new commit re-arms the gate ---"
 mark "$SHA"
 echo y >> "$REPO/f.txt"

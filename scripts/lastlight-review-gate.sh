@@ -211,64 +211,76 @@ gh_api_writes_pulls() {
 # method cannot be detached from its endpoint by leaving a quote open. That is
 # the direction this gate errs in.
 shell_segments() {
+  # One line per shell segment, splitting on the separators the shell uses --
+  # `;`, `|`, `&`, parens, a backtick, and a NEWLINE -- but only where the
+  # shell would: outside quotes, unescaped.
+  #
+  # THE WHOLE COMMAND IS ONE BUFFER. awk resets its state at every record and
+  # the shell carries quote state across newlines, so parsing line by line read
+  # the closing quote of a two-line string as an opening one: everything after
+  # it sat in an unterminated quote, and `echo "a<newline>b" ; git push` was
+  # allowed while bash ran the push. A newline outside quotes is a separator
+  # like any other; inside them it is text.
+  #
+  # An unterminated quote yields ONE segment: everything stays together, so a
+  # method cannot be detached from its endpoint by leaving a quote open.
   awk '
     BEGIN { SQ = sprintf("%c", 39); BT = sprintf("%c", 96) }
-    {
+    { buf = buf (NR > 1 ? "\n" : "") $0 }
+    END {
       seg = ""
       mode = ""
-      n = length($0)
+      n = length(buf)
       for (i = 1; i <= n; i++) {
-        c = substr($0, i, 1)
+        c = substr(buf, i, 1)
         if (mode == "sq") {
           if (c == SQ) mode = ""
-          seg = seg c
+          # A newline inside quotes is text, but the caller reads these segments
+          # a LINE at a time -- so emitting one would let `read` split a command
+          # the shell keeps whole. Carried through as a space: this scan cares
+          # where the words are, not what a string says.
+          seg = seg (c == "\n" ? " " : c)
         } else if (mode == "dq") {
           # A backslash still escapes inside double quotes, so a quoted \" does
           # not close the span.
-          if (c == "\\" && i < n) { seg = seg c substr($0, ++i, 1); continue }
+          if (c == "\\" && i < n) { seg = seg c substr(buf, ++i, 1); continue }
           # ...but double quotes are NOT opaque: the shell executes $( ) and
-          # backticks inside them. Treating the whole span as data left
-          # `OUT="$(git push origin HEAD)"` as one word, where the push grep
-          # never matched and the gh check never saw `gh` next to `api`. Both
-          # were denied before this rule was rewritten, and capturing output
-          # that way is entirely ordinary.
-          #
-          # Drop out of quoted mode with the separator, so the body is read the
-          # way the shell reads it. What follows the substitution is then read
-          # unquoted too, which can split more than the shell would -- that
-          # direction only adds segments to look at.
-          if (c == "$" && i < n && substr($0, i + 1, 1) == "(") {
+          # backticks inside them.
+          if (c == "$" && i < n && substr(buf, i + 1, 1) == "(") {
             print seg; seg = ""; mode = ""; i++; continue
           }
-          if (c == BT) { print seg; seg = ""; mode = ""; continue }
+          if (c == BT) { print seg c; seg = ""; mode = ""; continue }
           if (c == "\"") mode = ""
-          seg = seg c
+          seg = seg (c == "\n" ? " " : c)
         } else {
-          if (c == "\\" && i < n) { seg = seg c substr($0, ++i, 1); continue }
+          if (c == "\\" && i < n) { seg = seg c substr(buf, ++i, 1); continue }
           if (c == SQ)   { mode = "sq"; seg = seg c; continue }
           if (c == "\"") { mode = "dq"; seg = seg c; continue }
-          # Parens separate commands too. Without them `(gh api ...)` stayed
-          # one segment whose first word tokenised as `(gh`, which never
-          # equalled `gh`, so the invocation was not recognised as gh api at
-          # all and a merge was scored a read. The spaced form `( gh api ...`
-          # was caught, because there the paren is its own word -- the verdict
-          # turned on a space.
-          if (c == ";" || c == "|" || c == "(" || c == ")") { print seg; seg = ""; continue }
-          # A backtick is command substitution, so it separates -- `OUT=`git
-          # push origin HEAD`` was otherwise neither matched by the fast path
-          # nor isolated here, and the push ran ungated.
+          # A newline outside quotes separates commands.
           #
-          # APPENDED to the segment it ends rather than dropped: the rule that
-          # gates a gh call whose flags arrive from a substitution looks for
-          # this character in the raw segment, and splitting it away would
-          # close one hole while opening that one.
+          # This IS redundant with the caller, which reads segments a line at a
+          # time and so splits on any newline that reaches it -- mutation
+          # testing says removing it moves no assertion, and that was checked
+          # against the gate rather than assumed. It stays because it is what
+          # makes this function correct on its own: the split done by the
+          # caller knows nothing about quotes, and the only reason it cannot
+          # go wrong is that quoted newlines are turned into spaces above.
+          # Two rules holding each other up is worth a line saying so.
+          #
+          # (No apostrophes in here. This comment sits inside a
+          # single-quoted awk program, and one of them closed the string.)
+          if (c == "\n" || c == ";" || c == "|" || c == "(" || c == ")") {
+            print seg; seg = ""; continue
+          }
+          # A backtick separates, and stays on the segment it ends: the rule
+          # that gates a gh call whose flags come from a substitution looks for
+          # this character in the raw segment.
           if (c == BT) { print seg c; seg = ""; continue }
           if (c == "&") {
             # Not every & separates. A redirection carries one -- 2>&1, >&2,
-            # <&3, &>out -- and the shell strips it before the command runs,
-            # so splitting there cut the method off a call that still had it.
-            prv = (i > 1) ? substr($0, i - 1, 1) : ""
-            nxt = (i < n) ? substr($0, i + 1, 1) : ""
+            # <&3, &>out -- and the shell strips it before the command runs.
+            prv = (i > 1) ? substr(buf, i - 1, 1) : ""
+            nxt = (i < n) ? substr(buf, i + 1, 1) : ""
             if (prv == ">" || prv == "<" || nxt == ">") { seg = seg c; continue }
             print seg; seg = ""; continue
           }
@@ -419,33 +431,38 @@ gh_api_segment_writes() {
 # the command, and every bypass in this function's history has lived in that
 # gap.
 shell_words() {
+  # The words a shell would hand a command: quotes removed, split on unquoted
+  # whitespace. Same state machine as shell_segments, one level down, and the
+  # same single buffer for the same reason.
+  #
+  # Used by every scan here. Matching raw text instead meant this gate and the
+  # shell were reading different commands -- `git "push" origin HEAD` is a push
+  # to one and prose to the other -- and a quoted commit message mentioning
+  # pushing was read as a push and denied fail-closed. A quoted string is ONE
+  # word here, so prose cannot look like a command and a quoted command cannot
+  # hide from one.
   awk '
     BEGIN { SQ = sprintf("%c", 39); BT = sprintf("%c", 96) }
-    {
+    { buf = buf (NR > 1 ? "\n" : "") $0 }
+    END {
       w = ""; started = 0; mode = ""
-      n = length($0)
+      n = length(buf)
       for (i = 1; i <= n; i++) {
-        c = substr($0, i, 1)
+        c = substr(buf, i, 1)
         if (mode == "sq") {
           if (c == SQ) { mode = ""; continue }
           w = w c; started = 1
         } else if (mode == "dq") {
-          if (c == "\\" && i < n) { w = w substr($0, ++i, 1); started = 1; continue }
+          if (c == "\\" && i < n) { w = w substr(buf, ++i, 1); started = 1; continue }
           if (c == "\"") { mode = ""; continue }
           w = w c; started = 1
         } else {
-          if (c == "\\" && i < n) { w = w substr($0, ++i, 1); started = 1; continue }
+          if (c == "\\" && i < n) { w = w substr(buf, ++i, 1); started = 1; continue }
           if (c == SQ)   { mode = "sq"; started = 1; continue }
           if (c == "\"") { mode = "dq"; started = 1; continue }
-          # A backtick is command substitution, not part of the word. Left in,
-          # `gh api ...` wrapped in one began with a backtick glued to `gh`,
-          # which never equals `gh`, so the call went unrecognised -- the paren
-          # form, one spelling later. Dropped here rather than split on in
-          # shell_segments: the rule that gates a call whose flags come from a
-          # substitution reads the raw segment for this character, and taking
-          # it out of the segment would have traded one hole for another.
+          # A backtick is command substitution, not part of the word.
           if (c == BT)   { started = 1; continue }
-          if (c == " " || c == "\t") {
+          if (c == " " || c == "\t" || c == "\n") {
             if (started) print w
             w = ""; started = 0
             continue
@@ -454,8 +471,8 @@ shell_words() {
         }
       }
       if (started) print w
-      # Ends inside a quote: the caller cannot treat these words as what gh
-      # would receive, because a shell would not have run this at all.
+      # Ends inside a quote: the caller cannot treat these words as what the
+      # command would receive, because a shell would not have run this at all.
       if (mode != "") exit 1
     }
   ' <<< "$1"
@@ -516,19 +533,17 @@ main() {
   # PR-opening is included as belt-and-braces. Once every push is gated, HEAD
   # always has a marker by the time a PR is opened, so this adds no friction --
   # but it still catches a branch pushed BEFORE this gate existed.
+  # NO TEXT PRE-FILTER. There used to be one, and it decided whether the word
+  # test ran at all -- so `git "push" origin HEAD`, which is a push to the shell
+  # and prose to a grep, never reached the words that would have recognised it.
+  # The comment claiming it merely "erred loose" was wrong: a filter that gates
+  # the check is the check.
+  #
+  # Everything below is decided from words. The parse was never the expensive
+  # part; the git work is, and that still sits behind these tests.
   local opens=0
-  # Same shape, same loosening: `GH_TOKEN=x gh pr create` was not matched either.
-  grep -Eq '(^|[^[:alnum:]_.-])gh[[:space:]]+pr[[:space:]]+(create|ready|reopen)([[:space:]]|$|\)|`)' <<< "$cmd" && opens=1
+  segment_opens_pr "$cmd" && opens=1
   gh_api_writes_pulls "$cmd" && opens=1
-  local has_push=0
-  # A PRE-FILTER only, so it errs loose: the per-segment word test below is what
-  # decides. Anchoring `git` to the start of a line or a separator meant an
-  # assignment or a wrapper in front hid it -- `GIT_TRACE=1 git push origin
-  # HEAD` was never gated, and never had been. Found by a case written for the
-  # command-position check rather than by a review.
-  grep -Eq '(^|[^[:alnum:]_.-])git([[:space:]]+-C[[:space:]]+[^[:space:]]+)?[[:space:]]+push([[:space:]]|$|\)|`)' <<< "$cmd" \
-    && has_push=1
-  [[ $opens -eq 1 || $has_push -eq 1 ]] || allow
 
   if [[ $opens -eq 1 ]]; then
     gate_pr_open "$cmd" "$cwd"
@@ -553,6 +568,29 @@ main() {
   done < <(shell_segments "$cmd")
 
   allow
+}
+
+# Whether the command opens or un-drafts a pull request, judged on words.
+#
+# Was a text grep anchored to the start of a line or a separator, so
+# `GH_TOKEN=x gh pr create --fill` did not match it -- and a quoted spelling
+# would not have either.
+segment_opens_pr() {
+  local cmd=$1 w out i
+  local -a words=()
+  out=$(shell_words "$cmd") || return 1
+  [[ -n $out ]] || return 1
+  while IFS= read -r w; do words+=("$w"); done <<< "$out"
+
+  local n=${#words[@]}
+  for ((i = 0; i + 2 < n; i++)); do
+    [[ ${words[i]} == gh && ${words[i + 1]} == pr ]] || continue
+    case ${words[i + 2]} in
+      create | ready | reopen) return 0 ;;
+      *) ;;
+    esac
+  done
+  return 1
 }
 
 # Whether this segment invokes `git push`, judged on the words a shell would
@@ -591,7 +629,12 @@ segment_pushes() {
     for ((j = 0; j < i; j++)); do
       case ${words[j]} in
         *=*) ;; # VAR=value git push
-        sudo | doas | env | command | exec | nohup | time) ;;
+        sudo | doas | env | command | exec | nohup | time | xargs) ;;
+        # Shell keywords and group openers introduce a command as legitimately
+        # as a wrapper does, and they carry no arguments of their own, so
+        # allowing them costs nothing. Without them
+        # `if true; then git push origin HEAD; fi` was not a push.
+        if | then | else | elif | while | until | do | '{' | '!') ;;
         *)
           command_position=0
           break
