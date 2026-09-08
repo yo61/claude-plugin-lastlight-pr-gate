@@ -93,17 +93,15 @@ resolve_target() {
   if [[ -n $p && -d $p ]]; then printf '%s' "$p"; else printf '%s' "$fallback"; fi
 }
 
-# Arguments belonging to the `git push`, up to the next command separator.
-push_args() {
-  sed -E -n 's/.*git([[:space:]]+-C[[:space:]]+[^[:space:]]+)?[[:space:]]+push[[:space:]]*([^;&|`]*).*/\2/p' <<< "$1" | head -1
-}
-
 # Local revisions whose commits would land remotely, one per line. Empty output
 # means "nothing lands" (tag-only, deletion) OR "could not tell" -- the caller
 # distinguishes the two, because those must not share a verdict.
 pushed_revs() {
-  local args=$1 tok seen_remote=0 skip_next=0
-  for tok in $args; do
+  # WORDS, one per argument, not a string to re-split. The caller used to hand
+  # over text that this function word-split again, which meant a second parse
+  # that could disagree with the first -- and did, for anything quoted.
+  local tok seen_remote=0 skip_next=0
+  for tok in "$@"; do
     # Redirections are not refs. `git push ... 2>&1 | tail` was read as a ref
     # named `2>` and denied a properly reviewed SHA, so these are stripped
     # first. A bare operator (`>`, `2>>`) takes the NEXT token as its target;
@@ -541,8 +539,15 @@ main() {
   #
   # Everything below is decided from words. The parse was never the expensive
   # part; the git work is, and that still sits behind these tests.
-  local opens=0
-  segment_opens_pr "$cmd" && opens=1
+  local opens=0 s
+  # PER SEGMENT, like the other two scans. Handing the whole command line to a
+  # function written for a segment meant `(gh pr create --fill)` tokenised as
+  # `(gh` and matched nothing -- shell_words does not split on separators, that
+  # is what shell_segments is for. The base grep was anchored on those
+  # characters and caught it.
+  while IFS= read -r s; do
+    segment_opens_pr "$s" && opens=1
+  done < <(shell_segments "$cmd")
   gh_api_writes_pulls "$cmd" && opens=1
 
   if [[ $opens -eq 1 ]]; then
@@ -563,7 +568,7 @@ main() {
   local seg prefix=""
   while IFS= read -r seg; do
     prefix="$prefix$seg;"
-    segment_pushes "$seg" || continue
+    push_words "$seg" > /dev/null || continue
     gate_push_segment "$seg" "$prefix" "$cwd"
   done < <(shell_segments "$cmd")
 
@@ -576,15 +581,18 @@ main() {
 # `GH_TOKEN=x gh pr create --fill` did not match it -- and a quoted spelling
 # would not have either.
 segment_opens_pr() {
-  local cmd=$1 w out i
+  local seg=$1 w out i
   local -a words=()
-  out=$(shell_words "$cmd") || return 1
+  out=$(shell_words "$seg") || return 1
   [[ -n $out ]] || return 1
   while IFS= read -r w; do words+=("$w"); done <<< "$out"
 
   local n=${#words[@]}
   for ((i = 0; i + 2 < n; i++)); do
     [[ ${words[i]} == gh && ${words[i + 1]} == pr ]] || continue
+    # `echo gh pr create --fill` is prose, not a PR-open. The push scan already
+    # required this and the gh one did not.
+    in_command_position "$i" "${words[@]}" || continue
     case ${words[i + 2]} in
       create | ready | reopen) return 0 ;;
       *) ;;
@@ -593,58 +601,101 @@ segment_opens_pr() {
   return 1
 }
 
-# Whether this segment invokes `git push`, judged on the words a shell would
-# produce rather than on the text.
+# Whether the word at INDEX is the command of its segment, given every word.
 #
-# The text test matched inside quotes, so
-# `git commit -m "fix: git push origin handling"` read as a push, its message
-# was parsed for refspecs, and the command was denied fail-closed. The base
-# commit allows it; commit-and-push one-liners that mention pushing in the
-# message are ordinary, and this hook runs on every Bash call.
+# `echo git push foo bar` and `echo gh pr create` have those words in them and
+# are not commands; the refspecs taken from the first do not resolve, so it
+# denied fail-closed over an unknown ref. Only assignments, a wrapper, or a
+# shell keyword may precede a command.
 #
-# A quoted string is one word here, so prose cannot look like a command. An
-# unterminated quote leaves the words unreliable, so it is not read as a push
-# either -- the gh rule treats that case as a write, but here the equivalent
-# would be to deny an ordinary line for being hard to parse.
-segment_pushes() {
+# KNOWN GAP: a wrapper carrying its own arguments -- `sudo -u someone git push`
+# -- is not recognised, so it is not gated. The alternative is treating every
+# `git push` anywhere on a line as a command, which is what denied the echo.
+# Named here rather than left to be rediscovered.
+#
+# One function, because the rule was about to exist in two scans, and two
+# copies of a rule are two rules.
+in_command_position() {
+  local idx=$1
+  shift
+  local -a words=("$@")
+  local j
+  for ((j = 0; j < idx; j++)); do
+    case ${words[j]} in
+      *=*) ;; # VAR=value git push
+      sudo | doas | env | command | exec | nohup | time | xargs) ;;
+      # Shell keywords and group openers introduce a command as legitimately as
+      # a wrapper does, and carry no arguments of their own.
+      if | then | else | elif | while | until | do | '{' | '!') ;;
+      *) return 1 ;;
+    esac
+  done
+  return 0
+}
+
+# The argument words of a `git push` in this segment, one per line, or
+# non-zero when the segment does not invoke one.
+#
+# DETECTION AND EXTRACTION FROM THE SAME PARSE. Detection moved onto shell
+# words one commit ago and extraction was left grepping the raw text for a
+# literal `git push`, so quoting the shell strips -- `git "push" origin x` --
+# was detected as a push whose arguments came back EMPTY. An empty argument
+# list reads as "no explicit ref", which substitutes HEAD, and HEAD normally
+# carries a marker right after a legitimate review. The gate approved a push of
+# something else entirely.
+#
+# `git` has to BE the command, not an argument to one: `echo git push foo bar`
+# has those words in it and is not a push, and the refspecs taken from it do
+# not resolve, so it denied fail-closed over an unknown ref. Only assignments,
+# a wrapper, or a shell keyword may precede it.
+#
+# KNOWN GAP: a wrapper carrying its own arguments -- `sudo -u someone git push`
+# -- is not recognised, so it is not gated. The alternative is treating every
+# `git push` anywhere on a line as a command, which is what denied the echo.
+# Named here rather than left to be rediscovered.
+push_words() {
   local seg=$1 w out i
   local -a words=()
   out=$(shell_words "$seg") || return 1
   [[ -n $out ]] || return 1
   while IFS= read -r w; do words+=("$w"); done <<< "$out"
 
-  # `git` has to be the COMMAND, not an argument to one. `echo git push foo bar`
-  # has those words in it and is not a push -- and the refspecs taken from it
-  # do not resolve, so it denied fail-closed with a message about an unknown
-  # ref. Only assignments and a wrapper may precede it.
-  #
-  # KNOWN GAP: an unusual wrapper with its own arguments -- `sudo -u someone git
-  # push` -- is not recognised, so it is not gated. The alternative is treating
-  # every `git push` anywhere in a line as a command, which is what denied the
-  # echo. Named here rather than left to be rediscovered.
-  local n=${#words[@]} j
+  local n=${#words[@]} start=-1
   for ((i = 0; i + 1 < n; i++)); do
     [[ ${words[i]} == git ]] || continue
-    local command_position=1
-    for ((j = 0; j < i; j++)); do
-      case ${words[j]} in
-        *=*) ;; # VAR=value git push
-        sudo | doas | env | command | exec | nohup | time | xargs) ;;
-        # Shell keywords and group openers introduce a command as legitimately
-        # as a wrapper does, and they carry no arguments of their own, so
-        # allowing them costs nothing. Without them
-        # `if true; then git push origin HEAD; fi` was not a push.
-        if | then | else | elif | while | until | do | '{' | '!') ;;
-        *)
-          command_position=0
-          break
-          ;;
-      esac
-    done
-    [[ $command_position -eq 1 ]] || continue
-    [[ ${words[i + 1]} == push ]] && return 0
+    in_command_position "$i" "${words[@]}" || continue
+    if [[ ${words[i + 1]} == push ]]; then
+      start=$((i + 2))
+      break
+    fi
     # `git -C <dir> push`
-    [[ ${words[i + 1]} == -C && $((i + 3)) -lt $n && ${words[i + 3]} == push ]] && return 0
+    if [[ ${words[i + 1]} == -C && $((i + 3)) -lt $n && ${words[i + 3]} == push ]]; then
+      start=$((i + 4))
+      break
+    fi
+  done
+  [[ $start -ge 0 ]] || return 1
+
+  for ((i = start; i < n; i++)); do
+    printf '%s\n' "${words[i]}"
+  done
+}
+
+# Whether any of these argument words is the given flag.
+#
+# EXACT. The first version also matched `--flag=value`, and mutation testing
+# said no assertion could tell the difference -- correctly, because none of the
+# flags asked about here takes a value in git. `git push --dry-run=1` is an
+# error, not a dry run, so reading it as one would ALLOW a push that git was
+# going to refuse anyway; not matching it gates instead. Untestable and
+# strictly less safe, so it is gone rather than carried as defence in depth
+# that cannot be checked.
+push_has_flag() {
+  local want=$1
+  shift
+  local a
+  for a in "$@"; do
+    [[ $a == "$want" ]] && return 0
   done
   return 1
 }
@@ -656,13 +707,13 @@ segment_pushes() {
 # ends the hook for the whole command line, and that is precisely how a dry run
 # chained after a real push came to speak for it.
 gate_push_segment() {
-  local seg=$1 prefix=$2 cwd=$3 args target gitdir
-
-  args=$(push_args "$seg")
+  local seg=$1 prefix=$2 cwd=$3 w target gitdir
+  local -a args=()
+  while IFS= read -r w; do [[ -n $w ]] && args+=("$w"); done < <(push_words "$seg")
 
   # A dry run sends nothing, so it needs no repository state -- but it says so
   # only about ITSELF.
-  grep -Eq '(^|[[:space:]])--dry-run([[:space:]]|$)' <<< "$args" && return 0
+  push_has_flag --dry-run "${args[@]+"${args[@]}"}" && return 0
 
   target=$(resolve_target "$prefix" "$cwd")
   [[ -n $target && -d $target ]] || return 0
@@ -685,19 +736,20 @@ gate_push_segment() {
   [[ -e "$gitdir/lastlight-review-gate-off" ]] && return 0
 
   # Nothing lands: deletions and tag-only pushes.
-  grep -Eq '(^|[[:space:]])(--delete|-d)([[:space:]]|$)' <<< "$args" && return 0
-  if grep -Eq '(^|[[:space:]])--tags([[:space:]]|$)' <<< "$args"; then
-    [[ -z $(pushed_revs "$args") ]] && return 0
+  push_has_flag --delete "${args[@]+"${args[@]}"}" && return 0
+  push_has_flag -d "${args[@]+"${args[@]}"}" && return 0
+  if push_has_flag --tags "${args[@]+"${args[@]}"}"; then
+    [[ -z $(pushed_revs "${args[@]+"${args[@]}"}") ]] && return 0
   fi
 
   # `--all` / `--mirror` push a set this cannot enumerate from the command line.
-  if grep -Eq '(^|[[:space:]])(--all|--mirror)([[:space:]]|$)' <<< "$args"; then
+  if push_has_flag --all "${args[@]+"${args[@]}"}" || push_has_flag --mirror "${args[@]+"${args[@]}"}"; then
     deny "$(gate_message "$(git -C "$target" rev-parse HEAD 2> /dev/null || echo HEAD)" \
       'A --all/--mirror push sends refs this gate cannot enumerate, so it cannot confirm every SHA was reviewed.')"
   fi
 
   local revs real
-  revs=$(pushed_revs "$args")
+  revs=$(pushed_revs "${args[@]+"${args[@]}"}")
   if [[ -z $revs ]]; then
     # No explicit ref: bare `git push` sends the current branch.
     revs=HEAD

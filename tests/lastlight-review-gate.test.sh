@@ -547,6 +547,42 @@ expect allow "push (gate off)" 'git push'
 expect allow "gh pr create (gate off)" 'gh pr create --fill'
 rm -f "$REPO/.git/lastlight-review-gate-off"
 
+echo "--- quoting must not hide which ref is being pushed ---"
+# Detection moved onto shell words and extraction was left grepping the raw
+# text for a literal `git push`, so anything the shell strips made the argument
+# list come back EMPTY -- which reads as "no explicit ref", substitutes HEAD,
+# and HEAD has a marker right after a legitimate review. The gate then approved
+# a push of something else entirely.
+#
+# So these need a ref that is not HEAD and is not reviewed. With only HEAD in
+# play the broken answer and the correct one are the same word.
+git -C "$REPO" branch -q evilwork HEAD~1 2> /dev/null || true
+mark "$(git -C "$REPO" rev-parse HEAD)"
+expect deny "an unreviewed ref, plainly" 'git push origin evilwork'
+expect deny "...with push quoted" 'git "push" origin evilwork'
+expect deny "...with git quoted" '"git" push origin evilwork'
+expect deny "...with the flag quoted" 'git push "--all"'
+expect deny "...the flag unquoted, for scale" 'git push --all'
+# ...and the things that legitimately land nothing still do.
+expect allow "the reviewed HEAD still goes" 'git push origin HEAD'
+expect allow "a dry run still goes" 'git push --dry-run'
+expect allow "a deletion still goes" 'git push origin --delete old'
+unmark
+git -C "$REPO" branch -q -D evilwork
+
+echo "--- a PR-open is found per segment, and only when it is a command ---"
+# segment_opens_pr is written for a segment and was handed the whole command
+# line; shell_words does not split on separators, so `(gh pr create --fill)`
+# tokenised as `(gh` and matched nothing. The base grep was anchored on those
+# characters and caught it.
+unmark
+expect deny "gh pr create in parens" '(gh pr create --fill)'
+expect deny "...straight after a semicolon" 'true;gh pr create --fill'
+expect deny "...after &&" 'true && gh pr create --fill'
+# ...and prose is still prose. The push scan required this and the gh one did
+# not, so the rule is one function now and both ask it.
+expect allow "prose mentioning gh pr create" 'echo gh pr create --fill'
+
 echo "--- a PR-open must not answer for a push ---"
 # gate_pr_open used to end the hook: every branch called allow() or deny(), and
 # allow() exits. So with HEAD reviewed, a `gh pr create` allowed the open and
