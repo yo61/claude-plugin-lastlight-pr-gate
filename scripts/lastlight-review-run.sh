@@ -137,7 +137,12 @@ main() {
     die "empty diff against ${base:0:12} -- nothing to review"
   fi
   local diff_hash
-  diff_hash=$(git hash-object "$OUT_DIR/diff.patch")
+  # --stdin, to match what the recorder recomputes. `git hash-object <path>`
+  # applies the clean filter for that path, so with core.autocrlf on a patch
+  # containing CRLF hashes differently from the same bytes on stdin -- and the
+  # recorder uses stdin. A freshly-run review of exactly the right diff was then
+  # rejected as not matching itself, on every push touching such a file.
+  diff_hash=$(git hash-object --stdin < "$OUT_DIR/diff.patch")
 
   # A stale findings.json would bias an "independent" pass, and the skill is
   # explicit that a finding copied from another stage is one the adjudicator can

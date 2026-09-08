@@ -224,7 +224,11 @@ sandbox_make_working_workspace() {
     || die "could not check out HEAD in the isolated workspace"
 
   patch=$(mktemp)
-  git -C "$root" diff HEAD > "$patch"
+  # --binary, or a changed binary file yields a "Binary files differ" stanza with
+  # no patch data and `git apply` refuses the whole thing -- taking down the
+  # working-tree review the README presents as the primary way to review before
+  # committing. One changed image anywhere in the repository was enough.
+  git -C "$root" diff --binary HEAD > "$patch"
   if [[ -s $patch ]]; then
     git -C "$ws" apply "$patch" 2> /dev/null \
       || die "could not apply the uncommitted changes to the isolated workspace"
