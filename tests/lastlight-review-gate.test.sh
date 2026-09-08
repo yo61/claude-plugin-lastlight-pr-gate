@@ -211,6 +211,27 @@ expect allow "a background & still separates" 'gh api repos/o/r/pulls/4 & echo d
 expect deny "...and a write after && is still caught" \
   'gh api repos/o/r/pulls/4 && gh api repos/o/r/pulls/4/merge -X PUT'
 expect allow "a redirect on a plain read" 'gh api repos/o/r/pulls/4 2>&1'
+# Parens separate commands as well. Without that, `(gh api ...)` stayed one
+# segment whose first word tokenised as `(gh`, which never equalled `gh`, so
+# the call was not recognised as `gh api` at all and the merge scored a read.
+# The spaced form was caught, because there the paren is its own word -- the
+# verdict turned on a space, and the comment beside the check already claimed
+# an opening paren was handled.
+expect deny "a paren attached to gh" '(gh api repos/o/r/pulls/4/merge -X PUT)'
+expect deny "...nested" '((gh api repos/o/r/pulls/4/merge -X PUT))'
+expect deny "...and backgrounded" '(gh api repos/o/r/pulls/4/merge -X PUT)&'
+expect deny "...the spaced form that already worked" '( gh api repos/o/r/pulls/4/merge -X PUT )'
+expect deny "...a brace group" '{ gh api repos/o/r/pulls/4/merge -X PUT ; }'
+# Wrapping a read in parens does not make it a write.
+expect allow "a paren-wrapped read" '(gh api repos/o/r/pulls/4)'
+# ...and with the ENDPOINT last, so the closing paren is what would stick to
+# it. Every case above ends in a method value, where a trailing paren costs
+# nothing: `PUT)` is not GET either way. Here it decides the verdict.
+expect deny "a write whose endpoint ends the paren" '(gh api -X POST repos/o/r/pulls)'
+expect allow "...and the read twin" '(gh api repos/o/r/pulls)'
+# Parens inside a quoted jq filter are data, not structure.
+expect allow "parens inside a jq filter" \
+  "gh api repos/o/r/pulls/4 --jq '.[] | select(.x)'"
 # Leaving a quote open must not detach the method: everything stays in one
 # segment, which is the direction this gate errs in.
 expect deny "an unterminated quote" "gh api 'repos/o/r/pulls/4/merge -X PUT"

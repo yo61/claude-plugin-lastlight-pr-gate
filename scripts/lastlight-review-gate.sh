@@ -227,7 +227,13 @@ gh_api_segments() {
           if (c == "\\" && i < n) { seg = seg c substr($0, ++i, 1); continue }
           if (c == SQ)   { mode = "sq"; seg = seg c; continue }
           if (c == "\"") { mode = "dq"; seg = seg c; continue }
-          if (c == ";" || c == "|") { print seg; seg = ""; continue }
+          # Parens separate commands too. Without them `(gh api ...)` stayed
+          # one segment whose first word tokenised as `(gh`, which never
+          # equalled `gh`, so the invocation was not recognised as gh api at
+          # all and a merge was scored a read. The spaced form `( gh api ...`
+          # was caught, because there the paren is its own word -- the verdict
+          # turned on a space.
+          if (c == ";" || c == "|" || c == "(" || c == ")") { print seg; seg = ""; continue }
           if (c == "&") {
             # Not every & separates. A redirection carries one -- 2>&1, >&2,
             # <&3, &>out -- and the shell strips it before the command runs,
