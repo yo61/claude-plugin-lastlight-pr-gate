@@ -172,6 +172,16 @@ expect deny "gh api merge with no fields" 'gh api --method PUT repos/o/r/pulls/4
 expect allow "gh api quoted GET" 'gh api -X "GET" repos/o/r/pulls/4'
 expect allow "gh api HEAD" 'gh api --method HEAD repos/o/r/pulls'
 
+# gh's flag parser takes the LAST occurrence of a repeated flag, so a
+# throwaway GET in front of a real write is still a write. Asking whether the
+# command mentioned GET anywhere turned every gated write back into a read.
+expect deny "repeated --method, last wins" 'gh api --method GET --method PUT repos/o/r/pulls/4/merge'
+expect deny "repeated -X, last wins" 'gh api -X GET repos/o/r/pulls/4/merge -X PUT'
+expect deny "GET then attached write" 'gh api -X GET repos/o/r/pulls -XDELETE'
+# ...and the converse: a write followed by a read really is a read, because
+# that is what gh would send.
+expect allow "write then GET, last wins" 'gh api -X PUT repos/o/r/pulls/4 -X GET'
+
 echo "--- never gated ---"
 expect allow "git status" 'git status'
 expect allow "git commit" 'git commit -m "feat: x"'

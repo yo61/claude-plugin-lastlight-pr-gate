@@ -147,7 +147,7 @@ pushed_revs() {
 # -- is treated as a write and gated. The cost of being wrong is now a refusal
 # someone will report, rather than a mutation nobody sees.
 gh_api_writes_pulls() {
-  local cmd=$1
+  local cmd=$1 method
 
   grep -Eq '(^|[;|&(])[[:space:]]*gh[[:space:]]+api[^;|&]*(/pulls|repos/[^[:space:]]*/pulls)' \
     <<< "$cmd" || return 1
@@ -156,17 +156,33 @@ gh_api_writes_pulls() {
   # carries its value with no separator, so these are matched on the flag.
   grep -Eq '(^|[[:space:]])(-[fF]|--field|--raw-field|--input)' <<< "$cmd" && return 0
 
-  # No method named at all: gh defaults to GET. Presence of the flag is the
-  # test, not the shape of what follows it -- requiring a separator missed the
-  # attached form `-XPOST`, which is exactly the kind of spelling this inversion
-  # exists to stop chasing.
-  grep -Eqi '(^|[[:space:]])(--method|-X)' <<< "$cmd" || return 1
-
-  # A method IS named. Only GET and HEAD are reads; quoting is stripped here
-  # because gh strips it too.
-  grep -Eqi "(--method|-X)[[:space:]]*=?[[:space:]]*[\"']?(GET|HEAD)[\"']?([[:space:]]|\$)" \
-    <<< "$cmd" && return 1
+  method=$(gh_api_last_method "$cmd")
+  [[ -z $method || $method == GET || $method == HEAD ]] && return 1
   return 0
+}
+
+# The method gh would actually use: the LAST one named, or empty if none is.
+#
+# Asking whether the command mentions GET anywhere was wrong. gh's flag parser
+# takes the last occurrence of a repeated flag, so `--method GET --method PUT`
+# sends a PUT -- and prepending a throwaway `--method GET` turned every gated
+# write back into a read. Verified on the wire, not assumed.
+#
+# Word-based, so the three spellings are handled where they differ rather than
+# by a pattern that has to cover all of them at once: `-X PUT`, `-XPUT` and
+# `--method=PUT`. Quotes are stripped because the shell strips them before gh
+# sees the value.
+gh_api_last_method() {
+  awk '{
+    m = ""
+    for (i = 1; i <= NF; i++) {
+      if ($i == "-X" || $i == "--method") { m = $(i + 1) }
+      else if ($i ~ /^-X./) { m = substr($i, 3) }
+      else if ($i ~ /^--method=/) { m = substr($i, 10) }
+    }
+    gsub(/["'"'"']/, "", m)
+    print toupper(m)
+  }' <<< "$1"
 }
 
 gate_pr_open() {

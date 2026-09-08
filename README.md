@@ -270,7 +270,7 @@ for t in tests/*.test.sh; do bash "$t"; done
 
 | suite | cases | covers |
 |---|---|---|
-| `lastlight-review-gate.test.sh` | 72 | what is gated, what is allowed through |
+| `lastlight-review-gate.test.sh` | 76 | what is gated, what is allowed through |
 | `lastlight-review-record.test.sh` | 10 | the pass bar and the attestation binding |
 | `lastlight-review-run.test.sh` | 46 | flag parsing, the prompt, the defaults, and the tool allowlist |
 | `lastlight-sandbox.test.sh` | 83 | review isolation and the containment verdict |
