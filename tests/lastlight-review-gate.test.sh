@@ -230,6 +230,31 @@ expect allow "a paren-wrapped read" '(gh api repos/o/r/pulls/4)'
 expect deny "a write whose endpoint ends the paren" '(gh api -X POST repos/o/r/pulls)'
 expect allow "...and the read twin" '(gh api repos/o/r/pulls)'
 
+# gh takes a query string in the endpoint and GitHub ignores unknown params, so
+# `repos/o/r/pulls?x=1` IS the collection endpoint. A `?` straight after
+# `pulls` matched neither pattern -- */pulls needs the word to end there,
+# */pulls/* needs a slash -- so the segment was scored a read before the field
+# and method checks ran, and the first of these OPENS A PULL REQUEST. The
+# single-PR form stayed covered by */pulls/*, which is how the collection hole
+# survived. Denied before this rule was narrowed.
+expect deny "a query string, then field flags" 'gh api "repos/o/r/pulls?x=1" -f title=x -f head=b -f base=main'
+expect deny "...with an explicit POST" 'gh api -X POST "repos/o/r/pulls?x=1"'
+expect deny "...spelled as a full URL" 'gh api -X POST "https://api.github.com/repos/o/r/pulls?x=1"'
+expect deny "...a fragment rather than a query" 'gh api -X POST "repos/o/r/pulls#f"'
+# Two question marks: the second is a literal inside the query. The strip has
+# to take everything from the FIRST one, or what is left still carries a `?`
+# and matches no endpoint pattern.
+expect deny "...a second ? inside the query" 'gh api -X POST "repos/o/r/pulls?a=1?b=2"'
+# ...and the single-PR form, which was already covered, so the two stay honest
+# about which pattern is doing the work.
+expect deny "a query on a single PR" 'gh api -X PATCH "repos/o/r/pulls/4?x=1"'
+# A read with a query is still a read: what changed is the endpoint match, not
+# the verdict rule.
+expect allow "a read with a query string" 'gh api "repos/o/r/pulls?state=open"'
+# ...and the match is on a path segment, not a substring, so this is not a
+# pulls endpoint at all.
+expect allow "a word that merely starts with pulls" 'gh api repos/o/r/pullsfoo -X POST'
+
 # The shell removes a backslash-newline before it parses, so what gh receives
 # has no continuation in it. Every scan in this gate is line-based -- awk
 # resets per record, grep matches per line -- so a continuation split one

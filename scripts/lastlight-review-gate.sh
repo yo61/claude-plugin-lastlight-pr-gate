@@ -297,9 +297,21 @@ gh_api_segment_writes() {
 
   # A pulls endpoint, as a whole word. Splitting the literal across a quote
   # boundary -- `"repos/o/r/pul""ls/4"` -- hid it from the old text match.
-  local names_pulls=0
+  #
+  # The query string comes off first. gh takes one in the endpoint and GitHub
+  # ignores unknown params, so `repos/o/r/pulls?x=1` IS the collection
+  # endpoint -- and a `?` straight after `pulls` matched neither pattern, so
+  # `gh api "repos/o/r/pulls?x=1" -f title=x -f head=b -f base=main` scored a
+  # read and opened a pull request. The single-PR form stayed covered by
+  # */pulls/*, which is why this survived: the hole was the collection.
+  #
+  # The inversion had been applied to the method spelling and not to this one.
+  # An endpoint spelling the rule has not heard of must not come out a read.
+  local names_pulls=0 endpoint
   for ((i = 0; i < n; i++)); do
-    case ${words[i]} in
+    endpoint=${words[i]%%\?*}
+    endpoint=${endpoint%%#*}
+    case $endpoint in
       */pulls | */pulls/* | pulls | pulls/*)
         names_pulls=1
         break
@@ -500,9 +512,12 @@ main() {
       # Fail CLOSED -- there is no network excuse here, only an unparsed command.
       deny "$(gate_message "unknown" "Could not resolve '${rev}' to a commit, so this gate cannot confirm what would land remotely.")"
     fi
-    if [[ -f "$gitdir/$WORK_SENTINEL" ]]; then
-      deny "$(work_sandbox_message "$gitdir")"
-    fi
+    # No sentinel check here. The identical one on the same $gitdir runs
+    # unconditionally above the nothing-lands allows, and `deny` exits -- so a
+    # copy in this loop could never fire and no test could reach it. Left over
+    # from moving that check up. sandbox_probe_verdict says why this matters:
+    # a redundant check in a security control cannot be tested, so it rots
+    # while reading as defence in depth.
     if [[ ! -f "$gitdir/$MARKER_DIR/$sha.json" ]]; then
       deny "$(gate_message "$sha" "${sha:0:12} (${rev}) has no local review recorded, and pushing it puts an unreviewed SHA on the remote.")"
     fi

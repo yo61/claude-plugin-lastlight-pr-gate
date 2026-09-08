@@ -46,12 +46,14 @@ repos:
 
       # The gate is only as good as its test suite, and the allow-cases are
       # the half that stops it crying wolf. Run them on every commit.
-      # `env GATE=...` is not decoration: the suite defaults GATE to the
-      # INSTALLED hook under ~/.claude/hooks, so without this the local hook
-      # validates a different file than the one being committed — a broken
-      # script here would pass, and a broken installed copy would fail a clean
-      # commit. CI sets it explicitly; so must this. `env` rather than a shell
-      # assignment because `entry` is exec'd, not shell-interpreted.
+      # `env GATE=...` pins the suite to the copy in this repo. It used to be
+      # load-bearing: the suite defaulted to the INSTALLED hook under
+      # ~/.claude/hooks, so without it a broken script here passed and a broken
+      # installed copy failed a clean commit. The suites resolve their own
+      # target from BASH_SOURCE now, so this is a second layer rather than the
+      # thing holding it up — and it stays, because what the hook validates
+      # should not depend on a default in another file. `env` rather than a
+      # shell assignment because `entry` is exec'd, not shell-interpreted.
       - id: gate-tests
         name: gate test suite
         entry: env GATE=./scripts/lastlight-review-gate.sh bash tests/lastlight-review-gate.test.sh
