@@ -212,7 +212,7 @@ gh_api_writes_pulls() {
 # the direction this gate errs in.
 shell_segments() {
   awk '
-    BEGIN { SQ = sprintf("%c", 39) }
+    BEGIN { SQ = sprintf("%c", 39); BT = sprintf("%c", 96) }
     {
       seg = ""
       mode = ""
@@ -226,6 +226,21 @@ shell_segments() {
           # A backslash still escapes inside double quotes, so a quoted \" does
           # not close the span.
           if (c == "\\" && i < n) { seg = seg c substr($0, ++i, 1); continue }
+          # ...but double quotes are NOT opaque: the shell executes $( ) and
+          # backticks inside them. Treating the whole span as data left
+          # `OUT="$(git push origin HEAD)"` as one word, where the push grep
+          # never matched and the gh check never saw `gh` next to `api`. Both
+          # were denied before this rule was rewritten, and capturing output
+          # that way is entirely ordinary.
+          #
+          # Drop out of quoted mode with the separator, so the body is read the
+          # way the shell reads it. What follows the substitution is then read
+          # unquoted too, which can split more than the shell would -- that
+          # direction only adds segments to look at.
+          if (c == "$" && i < n && substr($0, i + 1, 1) == "(") {
+            print seg; seg = ""; mode = ""; i++; continue
+          }
+          if (c == BT) { print seg; seg = ""; mode = ""; continue }
           if (c == "\"") mode = ""
           seg = seg c
         } else {
@@ -447,9 +462,12 @@ gate_pr_open() {
   [[ -n $target && -d $target ]] || return 0
   gitdir=$(git -C "$target" rev-parse --git-dir 2> /dev/null) || return 0
   [[ $gitdir = /* ]] || gitdir="$target/$gitdir"
+  # Sentinel first, for the reason gate_push_segment gives: in a work clone the
+  # opt-out is a file the session can write, so honouring it first let one
+  # `touch` undo the sentinel.
+  [[ -f "$gitdir/$WORK_SENTINEL" ]] && deny "$(work_sandbox_message "$gitdir")"
   [[ -e "$gitdir/lastlight-review-gate-off" ]] && return 0
   head=$(git -C "$target" rev-parse HEAD 2> /dev/null) || return 0
-  [[ -f "$gitdir/$WORK_SENTINEL" ]] && deny "$(work_sandbox_message "$gitdir")"
   [[ -f "$gitdir/$MARKER_DIR/$head.json" ]] && return 0
   deny "$(gate_message "$head" "This opens or un-drafts a PR at ${head:0:12}, which has no local review recorded.")"
 }
@@ -537,9 +555,13 @@ gate_push_segment() {
   [[ -n $target && -d $target ]] || return 0
   gitdir=$(git -C "$target" rev-parse --git-dir 2> /dev/null) || return 0
   [[ $gitdir = /* ]] || gitdir="$target/$gitdir"
-  [[ -e "$gitdir/lastlight-review-gate-off" ]] && return 0
-
-  # BEFORE the nothing-lands returns. The sentinel says nothing reaches a
+  # BEFORE the opt-out. In a work clone that file sits in the clone's own git
+  # dir, which the session can write -- Bash is auto-approved there and
+  # github.com is on the egress allowlist. The gate refused a forged marker and
+  # took a forged opt-out, which one `touch` was enough to produce. Inside a
+  # work clone the opt-out is just another file the session wrote.
+  #
+  # ...and BEFORE the nothing-lands returns. The sentinel says nothing reaches a
   # remote from a work workspace, and those returns were letting two things
   # through that do: a deletion removes a remote branch, and a tag push uploads
   # the tagged commit with its whole history -- so tagging the clone's HEAD and
@@ -547,6 +569,7 @@ gate_push_segment() {
   # tag-only push lands nothing new" holds for a repository whose commits
   # arrived through reviewed pushes; a work clone has its own.
   [[ -f "$gitdir/$WORK_SENTINEL" ]] && deny "$(work_sandbox_message "$gitdir")"
+  [[ -e "$gitdir/lastlight-review-gate-off" ]] && return 0
 
   # Nothing lands: deletions and tag-only pushes.
   grep -Eq '(^|[[:space:]])(--delete|-d)([[:space:]]|$)' <<< "$args" && return 0

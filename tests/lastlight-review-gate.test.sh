@@ -102,6 +102,9 @@ expect deny "push --mirror" 'git push --mirror origin'
 expect deny "cd repo && push" "cd $REPO && git push" "$OUTSIDE"
 expect deny "pushd repo && push" "pushd $REPO && git push" "$OUTSIDE"
 expect deny "subshell (cd && push)" "(cd $REPO && git push)" "$OUTSIDE"
+# `OUT="$(git push ...)"` is simply how output is captured, and it was allowed.
+expect deny "a push inside a quoted substitution" 'echo "$(git push origin HEAD)"'
+expect deny "...assigned to a variable" 'OUT="$(git push origin HEAD)"'
 expect deny "git -C repo push" "git -C $REPO push" "$OUTSIDE"
 expect deny "push after a commit" 'git commit -m x && git push'
 
@@ -248,6 +251,22 @@ expect deny "a paren attached to gh" '(gh api repos/o/r/pulls/4/merge -X PUT)'
 # word as a backtick glued to `gh`, which never equals `gh`, so the call was
 # not recognised at all. `$( )` was already caught, because a paren separates.
 expect deny "wrapped in backticks" '`gh api repos/o/r/pulls/4/merge -X PUT`'
+# Double quotes are NOT opaque: the shell executes $( ) and backticks inside
+# them. Treated as data, the whole call stayed one word -- the push grep never
+# matched, and the gh check never saw `gh` next to `api`. The unquoted form was
+# covered from the start and the quoted one never was, which is how these
+# survived twelve rounds while the base commit denied all of them.
+expect deny "a gh write inside a quoted substitution" \
+  'echo "$(gh api repos/o/r/pulls/4/merge -X PUT)"'
+expect deny "...assigned to a variable" \
+  'RESULT="$(gh api repos/o/r/pulls -f title=x)"'
+expect deny "...through a quoted backtick" \
+  'echo "`gh api repos/o/r/pulls/4/merge -X PUT`"'
+# A read inside one is still a read.
+expect allow "a quoted substitution around a read" \
+  'echo "$(gh api repos/o/r/pulls/4)"'
+# ...and an ordinary quoted string with parens in it is not a command.
+expect allow "parens in a plain quoted string" 'echo "hello (world)"'
 expect deny "...and in a command substitution" '$(gh api repos/o/r/pulls/4/merge -X PUT)'
 # Flags arriving FROM a substitution stay denied. This is why the backtick is
 # dropped by the tokenizer rather than split on by the segmenter -- splitting
@@ -531,6 +550,22 @@ workspace_off
 # the refusal is about the workspace, not about the marker.
 expect allow "the real repository is unaffected" 'git push origin HEAD'
 unmark
+
+# The opt-out used to be honoured BEFORE the sentinel, and in a work clone that
+# file sits in the clone's own git dir -- writable by the session, with Bash
+# auto-approved and github.com on the egress allowlist. So the gate refused a
+# forged marker and took a forged opt-out, which one `touch` produced.
+workspace_on
+touch "$REPO/.git/lastlight-review-gate-off"
+expect deny "a forged opt-out does not undo the sentinel" 'git push origin HEAD'
+expect deny "...nor for opening a PR" 'gh pr create --fill'
+rm -f "$REPO/.git/lastlight-review-gate-off"
+workspace_off
+# ...while outside a workspace the opt-out still works, which is the whole
+# point of having one.
+touch "$REPO/.git/lastlight-review-gate-off"
+expect allow "the opt-out still opts out" 'git push origin HEAD'
+rm -f "$REPO/.git/lastlight-review-gate-off"
 
 # The sentinel used to be checked inside the per-rev loop, below the early
 # allows for deletions and tag-only pushes -- so from a work workspace those
