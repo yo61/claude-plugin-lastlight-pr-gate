@@ -49,13 +49,20 @@ gh api repos/o/r/pulls/4/merge 2>&1 -X PUT     # method behind a redirection
 
 Nobody writes those by accident. They are evasion, and evasion is out of scope.
 
+(They are all merges, which are now out of scope for a second and simpler
+reason. They are kept here because the shape is what matters: the same
+spellings would be equally out of scope aimed at anything else.)
+
 ## What is gated
 
-Two things, because the purpose names two things:
+**New SHAs delivered to origin.** That is the line. Everything gated is on one
+side of it and everything else is not.
 
 1. **A `git push` that would land new commits on a remote.**
 2. **Creating or un-drafting a pull request** — `gh pr create`, `gh pr ready`,
    `gh pr reopen`, and the equivalent `gh api` POST to a `/pulls` collection.
+   These deliver no SHAs themselves, but they are the other thing that triggers
+   a billed review, which is the same cost by a different route.
 
 The GitHub MCP write tools are denied outright rather than gated, because an
 MCP call addresses a repository by owner and name and has no working directory
@@ -64,9 +71,20 @@ reason, and it is in the README.
 
 ## What is not gated
 
+**Reads are never blocked by this plugin.** Not `gh api` reads of pull
+requests, not reads whose endpoint is built from a variable, not anything else.
+A read delivers no SHA and triggers no review, so blocking one buys nothing and
+spends the thing that matters most: the willingness to leave the gate switched
+on.
+
+- **Merging a pull request.** Decided: out of scope. A merge delivers no new
+  SHA to origin and triggers no review of unreviewed work. Most of the `gh api`
+  classification existed to recognise merges, and it goes.
+- **Tag pushes.** Decided: out of scope. A tag push does upload the tagged
+  commit, and that was the argument for gating it; the decision is that it is
+  not what this plugin is for.
 - Anything that lands no new commits: `--dry-run`, ref deletions
   (`--delete`, `:branch`).
-- Reads of any kind, including `gh api` reads of pull requests.
 - Anything outside a git repository.
 - Any command in a repository with the opt-out file set.
 
@@ -133,25 +151,19 @@ recovery is to name the ref literally, which costs the caller one edit.
 These are genuinely undecided, and the current code has an answer that nobody
 chose deliberately.
 
-**1. Is merging a pull request in scope?** The purpose says "creating a PR" and
-"pushing code to an existing PR". Merging is neither. The gate currently gates
-`gh api .../pulls/N/merge`, and most of the complexity in the `gh api` path
-exists to classify merges. If merging is out of scope, that machinery goes.
+**Should the `gh` path ask rather than decide?** Still open. A `PreToolUse`
+hook can return `ask`. If evasion is out of scope and false positives are the
+primary failure, a prompt fits better than a parser: being wrong costs one
+keypress rather than a silent miss or a blocked workflow. Raised as issue #5.
+Note that with merges out of scope the `gh api` rule is much smaller than it
+was, so the case for this is weaker than it looked -- there may be little left
+worth asking about.
 
-**2. Are tag pushes in scope?** `git push --tags` is currently allowed as
-"nothing new lands", which is true of a repository whose commits arrived
-through reviewed pushes and false of one that has its own. Tagging a commit and
-pushing the tag uploads that commit and its history.
-
-**3. Should the `gh` path ask rather than decide?** A `PreToolUse` hook can
-return `ask`. If evasion is out of scope and false positives are the primary
-failure, a prompt is a better fit than a shell parser: being wrong costs one
-keypress instead of either a silent miss or a blocked workflow. This would
-delete most of the `gh api` classification. Raised as issue #5.
-
-**4. How much friction is a gated read worth?** `gh api repos/$OWNER/x/pulls`
-is a read, and it is currently denied because the expansion makes the call
-unreadable. Under failure-mode ordering above, that is the wrong trade.
+**Does `gh pr create` stay gated, given the line is "new SHAs to origin"?** It
+delivers no SHA. It is gated because it triggers the billed review, which is
+the cost the plugin exists to avoid, and because the purpose sentence names
+creating a PR explicitly. Recorded here because the two framings pull in
+different directions and someone should notice if that ever matters.
 
 ## How to use this document
 

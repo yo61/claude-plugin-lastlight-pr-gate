@@ -190,7 +190,7 @@ pushed_revs() {
 # unrecognised spelling, a quoted value, a method this rule has never heard of
 # -- is treated as a write and gated. The cost of being wrong is now a refusal
 # someone will report, rather than a mutation nobody sees.
-gh_api_writes_pulls() {
+gh_api_creates_pr_anywhere() {
   local cmd=$1 seg
   # PER INVOCATION. "The last flag wins" is true inside one gh call and not
   # across a command line: reading the whole string as one let a real write be
@@ -201,7 +201,7 @@ gh_api_writes_pulls() {
   # which at worst makes a read look like a write. That is the direction this
   # gate should err in.
   while IFS= read -r seg; do
-    gh_api_segment_writes "$seg" && return 0
+    gh_api_creates_pr "$seg" && return 0
     # `read` returns non-zero on a final line with no newline, which skips the
     # loop body entirely -- so an unchained command, the common case, was never
     # examined at all. The trailing newline is what makes the last segment a
@@ -331,108 +331,62 @@ shell_segments() {
   ' <<< "$1"
 }
 
-# Whether ONE invocation could change a pull request.
+# Whether this segment uses `gh api` to CREATE a pull request.
 #
-# Gated unless provably a read: no field flags, and either no method at all (gh
-# defaults to GET) or a method that is explicitly GET or HEAD. An unrecognised
-# spelling, a quoted value, or a method nobody has thought of is a write.
-# Whether ONE invocation could change a pull request.
+# That is the only `gh api` call this plugin is about. Merging is out of scope
+# -- a merge delivers no new SHA to origin and triggers no review -- and reads
+# are never blocked, so what remains is a POST to a /pulls collection.
 #
-# Gated unless provably a read: no field flags, and either no method at all (gh
-# defaults to GET) or a method that is explicitly GET or HEAD. An unrecognised
-# spelling, a value this rule has never heard of, or anything it cannot read at
-# all is a write.
+# GATED ONLY WHEN PROVABLY A CREATE, which is the opposite of what this rule
+# used to say. "Gated unless provably a read" was right while any write to
+# /pulls mattered and a miss meant unreviewed code; now a miss costs one billed
+# review and a false positive gets the whole gate switched off. See
+# docs/gate-contract.md for the ordering that decides this.
 #
-# Judged on the WORDS gh receives. Matching against the raw segment meant this
-# and gh were reading different commands: `"--method" PUT` never string-equals
-# `--method`, `"-ftitle=x"` has a quote where the scan wanted whitespace, and a
-# decoy `-X GET` inside a quoted --jq filter looked like the last method while
-# gh sent the PUT beside it. All three merged pull requests, and all three were
-# denied before the inversion narrowed this rule -- regressions, not gaps.
-gh_api_segment_writes() {
-  local seg=$1 w method="" i out unterminated=0
+# Three tests went with the old doctrine: one that treated any expansion as
+# hostile (it denied ordinary reads), one that treated an unparseable segment
+# as a write, and an endpoint match on /pulls/N/... that only ever caught
+# merges. An unreadable call is not provably a create, and that is now the
+# answer rather than a gap.
+gh_api_creates_pr() {
+  local seg=$1 w method="" i out
   local -a words=()
-  # Command substitution, not process substitution: this needs the tokenizer's
-  # exit status. An unterminated quote swallows the rest of the line into one
-  # word -- `gh api 'repos/o/r/pulls/4/merge -X PUT` then carries no `-X` word
-  # at all and scored as a read.
-  #
-  # Recorded here and acted on BELOW, once this is known to be a gh api call
-  # naming a pulls endpoint. Returning "writes pulls" here judged every line
-  # that ends inside a quote, and the scanners are line-based: a heredoc body
-  # containing an apostrophe, the first line of `git commit -m "$(cat <<'EOF'`,
-  # a two-line double-quoted string. Each denied the whole Bash command, saying
-  # it opened a pull request. `echo "line1<newline>line2"` was denied. This hook
-  # runs on every Bash call, so it blocked the commit that has to happen before
-  # the review that would clear the gate.
-  out=$(shell_words "$seg") || unterminated=1
-  if [[ -n $out ]]; then
-    while IFS= read -r w; do words+=("$w"); done <<< "$out"
-  fi
+  out=$(shell_words "$seg") || return 1
+  [[ -n $out ]] || return 1
+  while IFS= read -r w; do words+=("$w"); done <<< "$out"
+
   local n=${#words[@]}
   [[ $n -gt 1 ]] || return 1
 
-  # `gh api`, however the segment reaches it -- behind `sudo`, an env
-  # assignment, an opening paren.
   local is_api=0
   for ((i = 0; i + 1 < n; i++)); do
     if [[ ${words[i]} == gh && ${words[i + 1]} == api ]]; then
+      in_command_position "$i" "${words[@]}" || continue
       is_api=1
       break
     fi
   done
   [[ $is_api -eq 1 ]] || return 1
 
-  # A pulls endpoint, as a whole word. Splitting the literal across a quote
-  # boundary -- `"repos/o/r/pul""ls/4"` -- hid it from the old text match.
-  #
-  # The query string comes off first. gh takes one in the endpoint and GitHub
-  # ignores unknown params, so `repos/o/r/pulls?x=1` IS the collection
-  # endpoint -- and a `?` straight after `pulls` matched neither pattern, so
-  # `gh api "repos/o/r/pulls?x=1" -f title=x -f head=b -f base=main` scored a
-  # read and opened a pull request. The single-PR form stayed covered by
-  # */pulls/*, which is why this survived: the hole was the collection.
-  #
-  # The inversion had been applied to the method spelling and not to this one.
-  # An endpoint spelling the rule has not heard of must not come out a read.
-  local names_pulls=0 endpoint
+  # A /pulls COLLECTION, not a path below one. `repos/o/r/pulls` creates;
+  # `repos/o/r/pulls/4/merge` merges, and merging is not this plugin's
+  # business. The query string and any redirection come off first, because gh
+  # takes a query in the endpoint and the shell takes the redirection away.
+  local names_collection=0 endpoint
   for ((i = 0; i < n; i++)); do
-    # Everything the shell or a URL would cut the endpoint at. `?` and `#`
-    # belong to the URL; `>` and `<` are redirections the shell removes before
-    # gh runs, so `repos/o/r/pulls>out` IS the collection endpoint and matched
-    # neither pattern. A set rather than a chain of strips, so the next
-    # character of this kind is a character and not another line.
     endpoint=${words[i]%%[?#<>]*}
     case $endpoint in
-      */pulls | */pulls/* | pulls | pulls/*)
-        names_pulls=1
+      */pulls | pulls)
+        names_collection=1
         break
         ;;
-      *) ;; # not an endpoint word
+      *) ;; # not a pulls collection
     esac
   done
-  [[ $names_pulls -eq 1 ]] || return 1
+  [[ $names_collection -eq 1 ]] || return 1
 
-  # NOW the tokenizer's verdict matters. The words above were enough to
-  # recognise the call; nothing after this point can be read off a line that
-  # ends mid-quote, so it is not provably a read.
-  [[ $unterminated -eq 1 ]] && return 0
-
-  # An expansion can be anything, so the words above are not the ones gh will
-  # get. `gh api repos/o/r/pulls/4/merge $FLAGS` carries no literal flag and
-  # scored as method-less. Quoting does not help: gh takes an attached value,
-  # so a single word `"-XPUT"` is a PUT -- confirmed on the wire,
-  # `gh api repos/cli/cli "-XHEAD"` sent a HEAD request.
-  #
-  # WHAT THIS STILL DOES NOT COVER: an expansion can hide the ENDPOINT too, and
-  # such a segment never matches the test above. Closing that means gating
-  # every `gh api` carrying an expansion, ordinary issue and repo reads
-  # included. That is a change to what this function is for, and is left for
-  # its own decision rather than folded in behind a bug fix.
-  grep -q '[$`]' <<< "$seg" && return 0
-
-  # Field flags make gh POST on its own, whatever the method says, and they
-  # take their value attached -- so this matches on the flag, not the word.
+  # Field flags make gh POST whatever the method says, and creating a pull
+  # request needs them -- title, head, base.
   for ((i = 0; i < n; i++)); do
     case ${words[i]} in
       -f* | -F* | --field* | --raw-field* | --input*) return 0 ;;
@@ -440,10 +394,7 @@ gh_api_segment_writes() {
     esac
   done
 
-  # The method gh would actually use: the LAST one named, or empty if none is.
-  # Asking whether the command mentions GET anywhere was wrong -- gh's parser
-  # takes the last occurrence of a repeated flag, so a throwaway `--method GET`
-  # in front turned every gated write back into a read. Verified on the wire.
+  # ...or an explicit POST. The LAST method named is the one gh uses.
   for ((i = 0; i < n; i++)); do
     case ${words[i]} in
       -X | --method) [[ $((i + 1)) -lt $n ]] && method=${words[i + 1]} ;;
@@ -453,9 +404,7 @@ gh_api_segment_writes() {
     esac
   done
   method=$(tr '[:lower:]' '[:upper:]' <<< "$method")
-
-  [[ -z $method || $method == GET || $method == HEAD ]] && return 1
-  return 0
+  [[ $method == POST ]]
 }
 
 # The words a shell would hand a command: quotes removed, split on unquoted
@@ -599,13 +548,13 @@ main() {
   while IFS= read -r s; do
     segment_opens_pr "$s" && opens=1
   done < <(shell_segments "$cmd")
-  gh_api_writes_pulls "$cmd" && opens=1
+  gh_api_creates_pr_anywhere "$cmd" && opens=1
 
   if [[ $opens -eq 1 ]]; then
     gate_pr_open "$cmd" "$cwd"
   fi
 
-  # PER INVOCATION, for the reason gh_api_writes_pulls already splits: the
+  # PER INVOCATION, for the reason gh_api_creates_pr_anywhere already splits: the
   # arguments were read out of the whole command line, so
   # `git push origin HEAD ; git push --dry-run` had the dry run's flags stand
   # in for both pushes and the real one went out. Verified -- denied alone,

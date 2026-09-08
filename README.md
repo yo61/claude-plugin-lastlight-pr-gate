@@ -209,16 +209,30 @@ can leave.
 
 ## What is and is not gated
 
+The line is **new SHAs delivered to origin**. `docs/gate-contract.md` states
+the purpose this follows from, ranks the ways it can fail, and records what is
+deliberately out of scope; read that before changing any of the rules.
+
 Gated until a marker exists for the SHA being pushed:
 
 - every `git push` — including `-C`, `cd`/`pushd`, subshells, refspecs, force
   pushes, and `--all`/`--mirror` (which cannot be enumerated, so they are refused)
-- `gh pr create`, `gh pr ready`, `gh pr reopen`, `gh api ... /pulls`
+- creating or un-drafting a pull request: `gh pr create`, `gh pr ready`,
+  `gh pr reopen`, and `gh api` POSTing to a `/pulls` collection
 - the GitHub MCP write tools — see below
 
-Allowed without a review, because no new commit lands: ref deletions
+Allowed without a review, because no new commit reaches origin: ref deletions
 (`--delete`, `:branch`), tag-only pushes, `--dry-run`, anything outside a git
 repo.
+
+**Reads are never blocked.** Not `gh api` reads of pull requests, not reads
+whose endpoint is built from a variable. A read delivers no SHA and triggers no
+review, so refusing one costs the willingness to leave the gate switched on and
+buys nothing.
+
+**Merging is not gated.** A merge delivers no new SHA to origin and triggers no
+review of unreviewed work. Most of the `gh api` classification used to exist to
+recognise merges; it is gone.
 
 Because the question is purely local ("does this SHA have a marker?"), the gate
 needs **no network** and **fails closed**.
@@ -283,7 +297,7 @@ for t in tests/*.test.sh; do bash "$t"; done
 
 | suite | cases | covers |
 |---|---|---|
-| `lastlight-review-gate.test.sh` | 245 | what is gated, what is allowed through |
+| `lastlight-review-gate.test.sh` | 158 | what is gated, what is allowed through |
 | `lastlight-review-record.test.sh` | 13 | the pass bar and the attestation binding |
 | `lastlight-review-run.test.sh` | 71 | flag parsing, the prompt, the defaults, the tool allowlist, and what may cross back out of the sandbox |
 | `lastlight-sandbox.test.sh` | 101 | review isolation, the containment verdict, and what the branch may not own |
