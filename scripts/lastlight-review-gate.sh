@@ -80,8 +80,13 @@ deny() {
 # so `\(cd\|pushd\)` silently matches NOTHING on macOS -- which is exactly how
 # `cd repo && git push` leaked past an earlier version of this gate.
 resolve_target() {
-  local cmd=$1 fallback=$2 p
-  p=$(sed -E -n 's/.*git[[:space:]]+-C[[:space:]]+([^[:space:];&|)]*).*/\1/p' <<< "$cmd" | head -1)
+  local cmd=$1 fallback=$2 explicit=${3:-} p
+  # The command's OWN directory, when the caller could parse one, rather than
+  # any `git -C` found in the surrounding text. This used to scan the whole
+  # accumulated prefix, so an unrelated `git -C ../elsewhere status` earlier on
+  # the line decided where a later push was judged -- and with one opted-out
+  # repository anywhere on disk that was a one-line bypass.
+  p=$explicit
   if [[ -z $p ]]; then
     p=$(sed -E -n 's/.*(^|[^[:alnum:]_-])(cd|pushd)[[:space:]]+([^;&|)]*).*/\3/p' <<< "$cmd" | head -1 | sed 's/[[:space:]]*$//')
   fi
@@ -90,6 +95,11 @@ resolve_target() {
   p=${p%\'}
   p=${p#\'}
   p=${p/#\~/$HOME}
+  # A relative path is relative to where the COMMAND runs, not to wherever this
+  # hook happens to have been started. `git -C . -c x=y push` resolved `.` in
+  # the hook's own process directory and judged the push against a completely
+  # different repository -- one that happened to have a marker.
+  [[ -z $p || $p == /* ]] || p=$fallback/$p
   if [[ -n $p && -d $p ]]; then printf '%s' "$p"; else printf '%s' "$fallback"; fi
 }
 
@@ -660,22 +670,46 @@ push_words() {
   [[ -n $out ]] || return 1
   while IFS= read -r w; do words+=("$w"); done <<< "$out"
 
-  local n=${#words[@]} start=-1
+  local n=${#words[@]} start=-1 dir="" k
   for ((i = 0; i + 1 < n; i++)); do
     [[ ${words[i]} == git ]] || continue
     in_command_position "$i" "${words[@]}" || continue
-    if [[ ${words[i + 1]} == push ]]; then
-      start=$((i + 2))
-      break
-    fi
-    # `git -C <dir> push`
-    if [[ ${words[i + 1]} == -C && $((i + 3)) -lt $n && ${words[i + 3]} == push ]]; then
-      start=$((i + 4))
+
+    # Skip git's global options to reach the subcommand. Recognising `push`
+    # only straight after `git` meant `git -c x=y push` and
+    # `git --no-pager push` were not pushes at all -- fail-open, with not even
+    # the HEAD fallback running.
+    #
+    # The flags that take a SEPARATE value are enumerated because that set is
+    # bounded and getting it wrong swallows the subcommand. The boolean ones
+    # are not: anything else starting with `-` is skipped generically, so a
+    # flag nobody here has heard of cannot hide the push behind it.
+    k=$((i + 1))
+    while [[ $k -lt $n ]]; do
+      case ${words[k]} in
+        -C)
+          dir=${words[k + 1]:-}
+          k=$((k + 2))
+          ;;
+        -c | --git-dir | --work-tree | --namespace | --exec-path | --super-prefix)
+          k=$((k + 2))
+          ;;
+        -*) k=$((k + 1)) ;;
+        *) break ;;
+      esac
+    done
+
+    if [[ ${words[k]:-} == push ]]; then
+      start=$((k + 1))
       break
     fi
   done
   [[ $start -ge 0 ]] || return 1
 
+  # FIRST LINE is the -C directory, empty when there is none, and the argument
+  # words follow. One parse answers both questions: where the push runs and
+  # what it pushes. Asking a second time is how those two came to disagree.
+  printf '%s\n' "$dir"
   for ((i = start; i < n; i++)); do
     printf '%s\n' "${words[i]}"
   done
@@ -707,15 +741,32 @@ push_has_flag() {
 # ends the hook for the whole command line, and that is precisely how a dry run
 # chained after a real push came to speak for it.
 gate_push_segment() {
-  local seg=$1 prefix=$2 cwd=$3 w target gitdir
+  local seg=$1 prefix=$2 cwd=$3 w target gitdir dir="" first=1
   local -a args=()
-  while IFS= read -r w; do [[ -n $w ]] && args+=("$w"); done < <(push_words "$seg")
+  while IFS= read -r w; do
+    if [[ $first -eq 1 ]]; then
+      dir=$w
+      first=0
+      continue
+    fi
+    [[ -n $w ]] && args+=("$w")
+  done < <(push_words "$seg")
 
   # A dry run sends nothing, so it needs no repository state -- but it says so
   # only about ITSELF.
   push_has_flag --dry-run "${args[@]+"${args[@]}"}" && return 0
 
-  target=$(resolve_target "$prefix" "$cwd")
+  # A substitution in the push means the refs are not knowable from here.
+  # shell_words drops a backtick, leaving an empty word the loop above discards
+  # -- so the push looked like it named no ref, the gate substituted HEAD, and
+  # HEAD's marker vouched for whatever the substitution produced. The gh scan
+  # has had this test since the inversion; the push scan did not.
+  if grep -q '[$`]' <<< "$seg"; then
+    deny "$(gate_message "$(git -C "$cwd" rev-parse HEAD 2> /dev/null || echo HEAD)" \
+      'This push names its refs through a shell expansion, so the gate cannot tell which commits would land.')"
+  fi
+
+  target=$(resolve_target "$prefix" "$cwd" "$dir")
   [[ -n $target && -d $target ]] || return 0
   gitdir=$(git -C "$target" rev-parse --git-dir 2> /dev/null) || return 0
   [[ $gitdir = /* ]] || gitdir="$target/$gitdir"

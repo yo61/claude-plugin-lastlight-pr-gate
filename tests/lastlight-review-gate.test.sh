@@ -570,6 +570,60 @@ expect allow "a deletion still goes" 'git push origin --delete old'
 unmark
 git -C "$REPO" branch -q -D evilwork
 
+echo "--- a push whose refs come from an expansion ---"
+# shell_words drops a backtick, leaving an empty word the caller filters out --
+# so the push looked like it named NO ref, the gate substituted HEAD, and
+# HEAD carries a marker right after a legitimate review. A push of whatever the
+# substitution produced was vouched for by a review of something else.
+#
+# The other two spellings already failed closed for unrelated reasons: a bare
+# variable does not resolve as a ref, and $( ) splits the segment. Relying on
+# that is relying on an accident, so all three are asserted.
+mark "$(git -C "$REPO" rev-parse HEAD)"
+expect deny "a ref from a backtick" 'git push origin `echo other`'
+expect deny "...from a variable" 'git push origin $BRANCH'
+expect deny "...from a substitution" 'git push origin $(echo other)'
+expect allow "...while a literal reviewed HEAD still goes" 'git push origin HEAD'
+
+echo "--- a -C elsewhere must not decide where this push is judged ---"
+# resolve_target preferred any `git -C <dir>` found in the accumulated prefix
+# over the push itself, so an unrelated command naming another repository
+# decided the verdict -- and if that repository has the opt-out set, the push
+# here was allowed. The opt-out is documented as a feature, so one opted-out
+# checkout anywhere on disk was a one-line bypass.
+OPTOUT=$TMP/optout
+mkdir -p "$OPTOUT"
+git init -q -b main "$OPTOUT"
+git -C "$OPTOUT" config user.email t@t
+git -C "$OPTOUT" config user.name t
+echo x > "$OPTOUT/f.txt"
+git -C "$OPTOUT" add f.txt
+git -C "$OPTOUT" commit -qm "feat: initial"
+touch "$OPTOUT/.git/lastlight-review-gate-off"
+
+unmark
+expect deny "an unrelated -C does not move the verdict" \
+  "git -C $OPTOUT status ; git push origin main"
+# ...while a push that really is aimed at the opted-out repository still is.
+expect allow "a push actually run there is opted out" "git -C $OPTOUT push origin main"
+# ...and the opt-out belonging to THIS repo still works, so what changed is
+# whose opt-out counts, not whether one does.
+touch "$REPO/.git/lastlight-review-gate-off"
+expect allow "this repo's own opt-out still applies" 'git push origin main'
+rm -f "$REPO/.git/lastlight-review-gate-off"
+
+echo "--- git's own global options must not hide the subcommand ---"
+# `push` was recognised only straight after `git`, or after exactly
+# `git -C <dir>`, so any other global made the segment not a push at all --
+# fail-open, with not even the HEAD fallback running.
+unmark
+expect deny "-c between git and push" 'git -c color.ui=false push origin main'
+expect deny "--no-pager between them" 'git --no-pager push origin main'
+expect deny "-C and -c together" 'git -C . -c x=y push origin main'
+expect deny "--git-dir with an attached value" 'git --git-dir=.git push origin main'
+# A flag this list has never heard of must not hide it either.
+expect deny "an unknown boolean global" 'git --literal-pathspecs push origin main'
+
 echo "--- a PR-open is found per segment, and only when it is a command ---"
 # segment_opens_pr is written for a segment and was handed the whole command
 # line; shell_words does not split on separators, so `(gh pr create --fill)`
