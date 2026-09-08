@@ -185,8 +185,55 @@ gh_api_writes_pulls() {
     # loop body entirely -- so an unchained command, the common case, was never
     # examined at all. The trailing newline is what makes the last segment a
     # line like any other.
-  done < <(printf '%s\n' "$cmd" | tr ';&|' '\n')
+  done < <(gh_api_segments "$cmd")
   return 1
+}
+
+# One line per shell segment, splitting on `;`, `&` and `|` only where the
+# shell would: outside quotes, unescaped.
+#
+# `tr ';&|' '\n'` split everywhere, and a separator inside a quoted endpoint cut
+# the method away from the invocation carrying it --
+# `gh api 'repos/o/r/pulls/4/merge?a=1&b=2' -X PUT` became a method-less read
+# plus a fragment with no `gh api` in it, and the merge went ungated. Verified
+# against this gate: allowed before, denied after.
+#
+# Counting quotes and refusing an odd count closes that too, and refuses
+# `--jq '.[] | .body'` with it, which is how a gh READ is ordinarily written.
+# So the splitter is quote-aware instead of the caller being suspicious.
+#
+# An unterminated quote yields ONE segment: everything stays together, so a
+# method cannot be detached from its endpoint by leaving a quote open. That is
+# the direction this gate errs in.
+gh_api_segments() {
+  awk '
+    BEGIN { SQ = sprintf("%c", 39) }
+    {
+      seg = ""
+      mode = ""
+      n = length($0)
+      for (i = 1; i <= n; i++) {
+        c = substr($0, i, 1)
+        if (mode == "sq") {
+          if (c == SQ) mode = ""
+          seg = seg c
+        } else if (mode == "dq") {
+          # A backslash still escapes inside double quotes, so a quoted \" does
+          # not close the span.
+          if (c == "\\" && i < n) { seg = seg c substr($0, ++i, 1); continue }
+          if (c == "\"") mode = ""
+          seg = seg c
+        } else {
+          if (c == "\\" && i < n) { seg = seg c substr($0, ++i, 1); continue }
+          if (c == SQ)   { mode = "sq"; seg = seg c; continue }
+          if (c == "\"") { mode = "dq"; seg = seg c; continue }
+          if (c == ";" || c == "&" || c == "|") { print seg; seg = ""; continue }
+          seg = seg c
+        }
+      }
+      print seg
+    }
+  ' <<< "$1"
 }
 
 # Whether ONE invocation could change a pull request.
@@ -295,11 +342,9 @@ main() {
     gate_pr_open "$cmd" "$cwd"
   fi
 
-  # Nothing lands: deletions, tag-only pushes, dry runs.
-  grep -Eq '(^|[[:space:]])(--delete|-d|--dry-run)([[:space:]]|$)' <<< "$args" && allow
-  if grep -Eq '(^|[[:space:]])--tags([[:space:]]|$)' <<< "$args"; then
-    [[ -z $(pushed_revs "$args") ]] && allow
-  fi
+  # A dry run sends nothing at all, from anywhere, so it is decided before any
+  # repository state is looked at.
+  grep -Eq '(^|[[:space:]])--dry-run([[:space:]]|$)' <<< "$args" && allow
 
   local target gitdir
   target=$(resolve_target "$cmd" "$cwd")
@@ -307,6 +352,22 @@ main() {
   gitdir=$(git -C "$target" rev-parse --git-dir 2> /dev/null) || allow
   [[ $gitdir = /* ]] || gitdir="$target/$gitdir"
   [[ -e "$gitdir/lastlight-review-gate-off" ]] && allow
+
+  # BEFORE the nothing-lands allows, which is where this used to sit behind.
+  # The sentinel says nothing reaches a remote from a work workspace, and the
+  # allows below were letting two things through that do: a deletion removes a
+  # remote branch, and a tag push uploads the tagged commit with its whole
+  # history -- so tagging the clone's HEAD and pushing the tag lands unreviewed
+  # code with no marker and no `land`. "A tag-only push lands nothing new" holds
+  # for a repository whose commits arrived through reviewed pushes; a work
+  # clone has its own.
+  [[ -f "$gitdir/$WORK_SENTINEL" ]] && deny "$(work_sandbox_message "$gitdir")"
+
+  # Nothing lands: deletions and tag-only pushes.
+  grep -Eq '(^|[[:space:]])(--delete|-d)([[:space:]]|$)' <<< "$args" && allow
+  if grep -Eq '(^|[[:space:]])--tags([[:space:]]|$)' <<< "$args"; then
+    [[ -z $(pushed_revs "$args") ]] && allow
+  fi
 
   # `--all` / `--mirror` push a set this cannot enumerate from the command line.
   if grep -Eq '(^|[[:space:]])(--all|--mirror)([[:space:]]|$)' <<< "$args"; then

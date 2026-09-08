@@ -340,6 +340,19 @@ ok "a hardlink to a file outside is refused" "$(contained "$WS")" "no"
 WS=$(fc_ws absent)
 ok "nothing written at all is refused" "$(contained "$WS")" "no"
 
+# The check has to be positive: a find that cannot run must refuse, not wave
+# the file through. Shadowing it in a subshell is the cheapest way to ask.
+WS=$(fc_ws toolgone)
+printf '{"findings":[]}\n' > "$WS/$OUT_DIR/findings.json"
+ok "...and so is a file whose link count could not be read" \
+  "$(
+    # shellcheck disable=SC2329  # invoked indirectly: this shadows the
+    # binary that findings_contained calls, which is the whole test.
+    find() { return 127; }
+    contained "$WS"
+  )" "no"
+ok "the same file passes when find works" "$(contained "$WS")" "yes"
+
 echo "--- reviewer_git_env: git must be quiet AND still work ---"
 # The sandbox denies $HOME, and git looks there for four things. Asserted
 # against git itself rather than against the list: GIT_CONFIG_COUNT has to

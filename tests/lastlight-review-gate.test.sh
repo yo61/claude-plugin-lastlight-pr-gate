@@ -181,6 +181,36 @@ expect deny "...even spelled as an explicit GET" 'gh api -XGET repos/$OWNER/r/pu
 # this rule's business.
 expect allow "an expansion in another command" 'echo $HOME; gh api repos/o/r/pulls/4'
 
+# Splitting the command on every `;&|` cut inside quotes too, and a separator
+# in the quoted ENDPOINT put the method in a fragment that no longer looked
+# like a gh call: `gh api '...merge?a=1&b=2' -X PUT` scored as a
+# method-less read and merged the PR. gh takes query strings in the endpoint
+# and GitHub ignores unknown params, so it is a live PUT.
+expect deny "an & inside the quoted endpoint" \
+  "gh api 'repos/o/r/pulls/4/merge?a=1&b=2' -X PUT"
+expect deny "...a ; inside it" "gh api 'repos/o/r/pulls/4/merge?a=1;b=2' -X PUT"
+expect deny "...a | inside it" "gh api 'repos/o/r/pulls/4/merge?a=1|b=2' -X PUT"
+expect deny "...and double quotes as well" \
+  'gh api "repos/o/r/pulls/4/merge?a=1&b=2" -X PUT'
+# An escaped separator is not a separator either.
+expect deny "an escaped separator" 'gh api repos/o/r/pulls/4/merge\;x -X PUT'
+# Leaving a quote open must not detach the method: everything stays in one
+# segment, which is the direction this gate errs in.
+expect deny "an unterminated quote" "gh api 'repos/o/r/pulls/4/merge -X PUT"
+
+# The reason the splitter was made quote-aware rather than the caller made
+# suspicious of odd quote counts: a pipe inside quotes is how a gh READ is
+# ordinarily written, and counting quotes refuses it.
+expect allow "a piped jq filter is still a read" \
+  "gh api repos/o/r/pulls/4 --jq '.[] | .body'"
+expect allow "...double quoted too" 'gh api repos/o/r/pulls/4 --jq ".[] | .body"'
+# Genuinely separate invocations must still be judged separately -- the reason
+# the split exists at all.
+expect deny "a read chained before a real write" \
+  'gh api repos/o/r/pulls/4 ; gh api repos/o/r/pulls/4/merge -X PUT'
+expect deny "a real write chained before a read" \
+  'gh api repos/o/r/pulls/4/merge -X PUT ; gh api repos/o/r/pulls -X GET'
+
 # gh does not validate or normalise the method value, and the shell has
 # already collapsed repeated spaces before gh sees the argument -- so these
 # are the same request as the forms above, spelled differently.
@@ -286,5 +316,26 @@ workspace_off
 # the refusal is about the workspace, not about the marker.
 expect allow "the real repository is unaffected" 'git push origin HEAD'
 unmark
+
+# The sentinel used to be checked inside the per-rev loop, below the early
+# allows for deletions and tag-only pushes -- so from a work workspace those
+# went straight through while a plain `git push` was denied. Two of them reach
+# a remote: a deletion removes a branch, and a tag push uploads the tagged
+# commit with its whole history, so tagging the clone's HEAD and pushing the
+# tag lands unreviewed code with no marker and no `land`.
+workspace_on
+expect deny "a deletion does not escape a workspace" 'git push origin --delete main'
+expect deny "...nor the colon form" 'git push origin :victim-branch'
+expect deny "...nor a tag-only push" 'git push --tags'
+expect deny "...nor an explicit tag ref" 'git push origin refs/tags/v9'
+# A dry run genuinely sends nothing, from anywhere, so it stays allowed --
+# refusing it would buy no safety and would just be in the way.
+expect allow "a dry run is still fine" 'git push --dry-run'
+workspace_off
+
+# ...and outside a workspace they are all still allowed, so what changed is
+# where the sentinel is checked, not what counts as landing something.
+expect allow "a deletion outside a workspace" 'git push origin --delete main'
+expect allow "...a tag-only push outside one" 'git push --tags'
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]

@@ -162,6 +162,11 @@ main() {
       workspace=$(sandbox_make_workspace "$root" "$sha")
     fi
     review_root=$workspace
+    # BEFORE anything is written into the clone. Everything below writes from
+    # this process, outside the sandbox, with the user's privileges, at names
+    # the reviewed branch is free to have committed -- as a symlink, pointing
+    # anywhere.
+    sandbox_clear_runner_paths "$workspace"
     settings_file="$workspace/.lastlight-sandbox.json"
     mkdir -p "$workspace/$OUT_DIR"
     sandbox_settings_json "$workspace" > "$settings_file"
@@ -330,9 +335,14 @@ main() {
 #     too, which puts a real file at a real path outside;
 #   - it has one link. A hardlink shares content without being a symlink;
 #     whether the sandbox refuses to create one against a denied source is not
-#     something I could test from here, and refusing costs nothing. `find
-#     -links +1` rather than `stat`, whose flags differ between BSD and GNU in
-#     a way that has already produced a wrong answer here (see tests/lib.sh).
+#     something I could test from here, and refusing costs nothing.
+#
+# `find`, not `stat`, whose flags differ between BSD and GNU in a way that has
+# already produced a wrong answer here -- and `-links 1`, which makes find say
+# the file is unshared, rather than `-links +1`, which makes it say the file is
+# shared. The difference is only in the failure case and it is the whole point:
+# a find that did not run says nothing either way, and under `+1` that silence
+# read as containment. Same shape as the missing `rg` in tests/lib.sh.
 #
 # Refuse rather than copy carefully: nothing legitimate needs the artifact to
 # be anything but a plain file. The reviewer session has exited by now, so no
@@ -344,7 +354,7 @@ findings_contained() {
   dir=$(cd -P "$ws/$OUT_DIR" 2> /dev/null && pwd -P) || return 1
   root=$(cd -P "$ws" 2> /dev/null && pwd -P) || return 1
   [[ $dir == "$root" || $dir == "$root"/* ]] || return 1
-  [[ -z $(find "$path" -links +1 2> /dev/null) ]]
+  [[ -n $(find "$path" -links 1 2> /dev/null) ]]
 }
 
 # Environment for the reviewer's git, when the review is sandboxed.

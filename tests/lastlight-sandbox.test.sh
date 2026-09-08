@@ -33,6 +33,13 @@ die() {
 }
 # shellcheck disable=SC1090  # path resolved at runtime from $SANDBOX
 source "$SANDBOX"
+# Sourcing brought that script's own `set -euo pipefail` with it, and the flags
+# above were set BEFORE the source, so errexit has been on ever since. Any
+# assertion whose command exits non-zero then kills the run where it stands --
+# no summary, no FAIL line, exit 1, which reads as a crash rather than as the
+# suite reporting something. Declare what this suite wants instead of
+# inheriting it, the way the runner's suite already does.
+set +e
 
 ok() { # ok <condition-description> <actual> <expected>
   if [[ $2 == "$3" ]]; then
@@ -339,5 +346,84 @@ ok "the previous reviewer.log is not carried in" \
 ok "the uncommitted change is still there" \
   "$(count_matching two "$LKWS/f.txt")" "1"
 rm -rf "$LK_HOME" "$(dirname "$LK")" "$(dirname "$LKWS")"
+echo "--- the branch must not own the paths the runner writes into ---"
+# Everything the runner puts in the workspace -- the settings file, the diff,
+# the staged skill -- is written by THIS process, outside the sandbox, with the
+# user's privileges. The workspace is a clone of the branch under review, so
+# the branch chooses what is sitting at those names. Both halves were
+# reproduced before the fix: `cp` wrote the diff through a committed symlink
+# into a file outside the workspace, and a committed skill file stayed where
+# the prompt points while the real one landed a level deeper.
+RP=$TMP/runnerpaths
+mkdir -p "$RP/.lastlight/pr-review" "$RP/.lastlight-assets/skills"
+ln -s /etc/hosts "$RP/.lastlight/pr-review/diff.patch"
+printf 'committed\n' > "$RP/.lastlight-sandbox.json"
+sandbox_clear_runner_paths "$RP" 2> /dev/null
+
+present() { [[ -e $1 || -L $1 ]] && printf 'present' || printf 'gone'; }
+ok "a committed .lastlight is out of the write path" "$(present "$RP/.lastlight")" "gone"
+ok "...and .lastlight-assets with it" "$(present "$RP/.lastlight-assets")" "gone"
+ok "...and the settings path" "$(present "$RP/.lastlight-sandbox.json")" "gone"
+# Moved, not destroyed: the workspace is disposable either way, and a branch
+# that commits a symlink where the review tooling writes is worth the reviewer
+# seeing.
+ok "what the branch committed is kept" \
+  "$(find "$RP" -maxdepth 1 -name '.lastlight.branch-committed.*' | grep -c .)" "1"
+
+# A dangling symlink is the case that decides whether -L has to be asked for
+# separately: -e follows the link and is false when the target is missing, so
+# a test on -e alone walks straight past the redirect that matters most.
+RPD=$TMP/runnerpaths-dangling
+mkdir -p "$RPD"
+ln -s "$TMP/no-such-target" "$RPD/.lastlight"
+sandbox_clear_runner_paths "$RPD" 2> /dev/null
+ok "a DANGLING symlink is moved too" "$(present "$RPD/.lastlight")" "gone"
+
+# A workspace with none of them must come out unchanged -- no stray quarantine
+# directories for the reviewer to trip over.
+RPC=$TMP/runnerpaths-clean
+mkdir -p "$RPC/src"
+sandbox_clear_runner_paths "$RPC" 2> /dev/null
+ok "a clean workspace is left alone" \
+  "$(find "$RPC" -maxdepth 1 -name '*.branch-committed.*' | grep -c .)" "0"
+
+echo "--- staging the skill must not stage it UNDER the branch's own ---"
+# `cp -R src dst` copies INTO dst when dst exists as a directory, and exits 0.
+# The committed SKILL.md then keeps the path the prompt hands the reviewer, and
+# the prompt says to follow it EXACTLY -- so the branch under review writes its
+# own review, mints an APPROVE, and the attestation binds it.
+REAL=$TMP/realassets
+mkdir -p "$REAL/skills/pr-review"
+printf 'REAL\n' > "$REAL/skills/pr-review/SKILL.md"
+SA=$TMP/stageassets
+mkdir -p "$SA/.lastlight-assets/skills/pr-review"
+printf 'ATTACKER\n' > "$SA/.lastlight-assets/skills/pr-review/SKILL.md"
+
+# In a subshell with a die that EXITS, the way it does in the runner: this
+# suite's die returns instead, so the function under test would carry on past
+# its own precondition and the assertion would describe the harness.
+sa_out=$(
+  # shellcheck disable=SC2329  # invoked indirectly, by the function under
+  # test: it shadows this suite's die, which returns where the runner's exits.
+  die() {
+    printf 'die: %s\n' "$1" >&2
+    exit 1
+  }
+  sandbox_stage_assets "$REAL" "$SA" 2>&1
+) || true
+ok "staging refuses a .lastlight-assets that is already there" \
+  "$(grep -c 'refusing to stage' <<< "$sa_out")" "1"
+# One SKILL.md, not two: had the copy run, the real skill would be sitting at
+# .lastlight-assets/skills/skills/pr-review/SKILL.md beside the branch's.
+ok "...and nothing was copied in on top" \
+  "$(find "$SA" -name SKILL.md | grep -c .)" "1"
+
+sandbox_clear_runner_paths "$SA" 2> /dev/null
+sandbox_stage_assets "$REAL" "$SA"
+ok "after clearing, the prompt path holds the real skill" \
+  "$(cat "$SA/.lastlight-assets/skills/pr-review/SKILL.md")" "REAL"
+ok "...and only the real one is staged" \
+  "$(find "$SA/.lastlight-assets" -name SKILL.md | grep -c .)" "1"
+
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]

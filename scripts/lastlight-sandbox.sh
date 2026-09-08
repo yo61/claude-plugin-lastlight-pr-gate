@@ -162,11 +162,52 @@ read_deny_rules() {
   done < <(review_denied_reads)
 }
 
+# Paths inside the workspace that belong to the RUNNER, not to the branch.
+#
+# Each is written by this process, outside the sandbox, with the user's
+# privileges -- so a file the branch committed at one of these names is not
+# data, it is a redirect for a privileged write.
+sandbox_runner_paths() {
+  printf '%s\n' .lastlight-sandbox.json .lastlight .lastlight-assets
+}
+
+# Move anything the branch committed at those names out of the way.
+#
+# `mv`, not `rm -rf`: the whole workspace goes at the EXIT trap anyway, so
+# deleting buys nothing, and leaving the files where the reviewer can see them
+# is right -- a branch that commits a symlink where the review tooling writes
+# is a finding in itself. The suffix carries $$ so the branch cannot have
+# committed the quarantine name either.
+sandbox_clear_runner_paths() {
+  local ws=$1 rel target
+  [[ -n $ws && -d $ws ]] || die "cannot clear runner paths: '$ws' is not a directory"
+  while IFS= read -r rel; do
+    # -e is false for a dangling symlink, which is exactly the case that
+    # matters, so -L has to be asked separately.
+    [[ -e "$ws/$rel" || -L "$ws/$rel" ]] || continue
+    target="$ws/$rel.branch-committed.$$"
+    mv "$ws/$rel" "$target" \
+      || die "could not move the branch's own $rel out of the way in $ws"
+    printf '  moved committed %s aside: it names a path the runner writes\n' "$rel" >&2
+  done < <(sandbox_runner_paths)
+}
+
 # Copy the review assets into the workspace so the reviewer never has to read
 # outside it. Without this, scoping reads to the workspace would deny the
 # reviewer its own skill file, which lives under $HOME.
 sandbox_stage_assets() {
   local assets=$1 ws=$2
+  # `cp -R src dst` copies INTO dst when dst already exists as a directory, and
+  # exits 0 doing it -- so a committed .lastlight-assets/skills/pr-review/
+  # SKILL.md stayed at the path the prompt hands the reviewer while the real
+  # skill landed a level deeper, and `|| die` never fired. The reviewed branch
+  # would have been supplying the reviewer's instructions.
+  #
+  # A precondition rather than a defensive `rm`: the caller clears the runner's
+  # paths, and if that stops happening this says so instead of quietly running
+  # a review the branch wrote the rules for.
+  [[ ! -e "$ws/.lastlight-assets" && ! -L "$ws/.lastlight-assets" ]] \
+    || die "the workspace already has .lastlight-assets; refusing to stage the review skill on top of it"
   mkdir -p "$ws/.lastlight-assets"
   cp -R "$assets/skills" "$ws/.lastlight-assets/skills" \
     || die "could not stage the review assets into the isolated workspace"
