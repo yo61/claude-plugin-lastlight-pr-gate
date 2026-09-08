@@ -147,16 +147,41 @@ pushed_revs() {
 # -- is treated as a write and gated. The cost of being wrong is now a refusal
 # someone will report, rather than a mutation nobody sees.
 gh_api_writes_pulls() {
-  local cmd=$1 method
+  local cmd=$1 seg
+  # PER INVOCATION. "The last flag wins" is true inside one gh call and not
+  # across a command line: reading the whole string as one let a real write be
+  # cancelled by an unrelated read chained after it --
+  # `gh api .../pulls/4/merge -X PUT ; gh api .../other -X GET` came out a read.
+  #
+  # Splitting on separators without minding quotes can cut a segment in half,
+  # which at worst makes a read look like a write. That is the direction this
+  # gate should err in.
+  while IFS= read -r seg; do
+    gh_api_segment_writes "$seg" && return 0
+    # `read` returns non-zero on a final line with no newline, which skips the
+    # loop body entirely -- so an unchained command, the common case, was never
+    # examined at all. The trailing newline is what makes the last segment a
+    # line like any other.
+  done < <(printf '%s\n' "$cmd" | tr ';&|' '\n')
+  return 1
+}
+
+# Whether ONE invocation could change a pull request.
+#
+# Gated unless provably a read: no field flags, and either no method at all (gh
+# defaults to GET) or a method that is explicitly GET or HEAD. An unrecognised
+# spelling, a quoted value, or a method nobody has thought of is a write.
+gh_api_segment_writes() {
+  local seg=$1 method
 
   grep -Eq '(^|[;|&(])[[:space:]]*gh[[:space:]]+api[^;|&]*(/pulls|repos/[^[:space:]]*/pulls)' \
-    <<< "$cmd" || return 1
+    <<< "$seg" || return 1
 
   # Field flags make gh POST on its own, whatever the method says. `-ftitle=x`
   # carries its value with no separator, so these are matched on the flag.
-  grep -Eq '(^|[[:space:]])(-[fF]|--field|--raw-field|--input)' <<< "$cmd" && return 0
+  grep -Eq '(^|[[:space:]])(-[fF]|--field|--raw-field|--input)' <<< "$seg" && return 0
 
-  method=$(gh_api_last_method "$cmd")
+  method=$(gh_api_last_method "$seg")
   [[ -z $method || $method == GET || $method == HEAD ]] && return 1
   return 0
 }

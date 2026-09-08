@@ -182,6 +182,16 @@ expect deny "GET then attached write" 'gh api -X GET repos/o/r/pulls -XDELETE'
 # that is what gh would send.
 expect allow "write then GET, last wins" 'gh api -X PUT repos/o/r/pulls/4 -X GET'
 
+# "Last flag wins" holds inside ONE gh call, not across a command line.
+# Reading the whole string at once let a real write be cancelled by an
+# unrelated read chained after it.
+expect deny "write then a separate read" 'gh api repos/o/r/pulls/4/merge -X PUT ; gh api repos/o/r/other -X GET'
+expect deny "write then read, &&" 'gh api repos/o/r/pulls -XPOST && gh api repos/o/r/x -X GET'
+expect deny "read then write" 'gh api repos/o/r/pulls/4 -X GET ; gh api repos/o/r/pulls/4/merge -X PUT'
+expect deny "write piped onward" 'gh api repos/o/r/pulls -XPOST | jq .'
+# ...and a chain of genuine reads is still allowed.
+expect allow "two reads chained" 'gh api repos/o/r/pulls/4 ; gh api repos/o/r/pulls/5'
+
 echo "--- never gated ---"
 expect allow "git status" 'git status'
 expect allow "git commit" 'git commit -m "feat: x"'
