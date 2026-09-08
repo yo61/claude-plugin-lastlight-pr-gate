@@ -132,6 +132,43 @@ pushed_revs() {
 # Opening or un-drafting a PR surfaces HEAD for review. Once pushes are gated
 # this is normally already satisfied; it exists for branches that predate the
 # gate.
+# Whether a `gh api` call could change a pull request.
+#
+# INVERTED, deliberately: gated unless the call is provably a read. Matching the
+# ways of spelling a write failed four times in a row -- `--method=POST`,
+# `-XPOST`, `--method  post`, then `-X "PUT"` -- because gh accepts the value
+# attached, separated, quoted, in any case, and does not validate it. Each
+# revision closed the spelling that had just been found and left the next one
+# open, and every one of those was a silent allow.
+#
+# A read is a call with no field flags and either no method at all (gh defaults
+# to GET) or a method that is explicitly GET or HEAD. Anything else -- an
+# unrecognised spelling, a quoted value, a method this rule has never heard of
+# -- is treated as a write and gated. The cost of being wrong is now a refusal
+# someone will report, rather than a mutation nobody sees.
+gh_api_writes_pulls() {
+  local cmd=$1
+
+  grep -Eq '(^|[;|&(])[[:space:]]*gh[[:space:]]+api[^;|&]*(/pulls|repos/[^[:space:]]*/pulls)' \
+    <<< "$cmd" || return 1
+
+  # Field flags make gh POST on its own, whatever the method says. `-ftitle=x`
+  # carries its value with no separator, so these are matched on the flag.
+  grep -Eq '(^|[[:space:]])(-[fF]|--field|--raw-field|--input)' <<< "$cmd" && return 0
+
+  # No method named at all: gh defaults to GET. Presence of the flag is the
+  # test, not the shape of what follows it -- requiring a separator missed the
+  # attached form `-XPOST`, which is exactly the kind of spelling this inversion
+  # exists to stop chasing.
+  grep -Eqi '(^|[[:space:]])(--method|-X)' <<< "$cmd" || return 1
+
+  # A method IS named. Only GET and HEAD are reads; quoting is stripped here
+  # because gh strips it too.
+  grep -Eqi "(--method|-X)[[:space:]]*=?[[:space:]]*[\"']?(GET|HEAD)[\"']?([[:space:]]|\$)" \
+    <<< "$cmd" && return 1
+  return 0
+}
+
 gate_pr_open() {
   local cmd=$1 cwd=$2 target gitdir head
   target=$(resolve_target "$cmd" "$cwd")
@@ -159,26 +196,7 @@ main() {
   # but it still catches a branch pushed BEFORE this gate existed.
   local opens=0
   grep -Eq '(^|[;|&(])[[:space:]]*gh[[:space:]]+pr[[:space:]]+(create|ready|reopen)([[:space:]]|$|\))' <<< "$cmd" && opens=1
-  # `gh api` touching /pulls is only a PR-opener when it WRITES. The command
-  # defaults to GET, so gating every mention of /pulls refused ordinary reads --
-  # including reading a review's own comments on the PR it had just blocked.
-  # A write is an explicit mutating --method, or a field flag, which makes gh
-  # use POST on its own.
-  #
-  # Every spelling of the same request. gh's flag parser takes the value
-  # attached or separated, gh does not validate or normalise the method, and the
-  # shell has already collapsed repeated spaces before gh sees the argument. So
-  # `-XPOST`, `--method=POST`, `--method  post` and `-X delete` are all the same
-  # call, and each one this pattern missed was a write the gate let through.
-  # Matched case-insensitively for that reason; a lowercase `-x` is not a gh
-  # flag, so the only cost is refusing something that was never valid.
-  #
-  # Field flags carry their value attached too (`-ftitle=x`), so they are
-  # matched on the flag alone.
-  if grep -Eq '(^|[;|&(])[[:space:]]*gh[[:space:]]+api[^;|&]*(/pulls|repos/[^[:space:]]*/pulls)' <<< "$cmd" \
-    && grep -Eqi '(--method|-X)[[:space:]]*=?[[:space:]]*(POST|PATCH|PUT|DELETE)|(^|[[:space:]])(-[fF]|--field|--raw-field|--input)' <<< "$cmd"; then
-    opens=1
-  fi
+  gh_api_writes_pulls "$cmd" && opens=1
   if [[ $opens -eq 0 ]]; then
     grep -Eq '(^|[;|&(])[[:space:]]*git([[:space:]]+-C[[:space:]]+[^[:space:]]+)?[[:space:]]+push([[:space:]]|$|\))' <<< "$cmd" || allow
   fi

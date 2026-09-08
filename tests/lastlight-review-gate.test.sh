@@ -158,6 +158,20 @@ expect deny "gh api --method=patch" 'gh api --method=patch repos/o/r/pulls/1'
 # ...and a read stays a read however it is spaced or cased.
 expect allow "gh api lowercase get" 'gh api --method get repos/o/r/pulls'
 
+# Quoting is stripped by the shell before gh sees it, so a quoted method is
+# the same request. Chasing spellings missed this one after three revisions,
+# which is why the rule is now inverted: gated unless provably a read.
+expect deny "gh api -X quoted PUT" 'gh api -X "PUT" repos/o/r/pulls/4/merge'
+expect deny "gh api --method quoted POST" 'gh api --method "POST" repos/o/r/pulls'
+expect deny "gh api single-quoted DELETE" 'gh api -X '\''DELETE'\'' repos/o/r/pulls/1'
+# A method nobody has thought of is gated too, rather than allowed by
+# default. That is the whole point of the inversion.
+expect deny "gh api unknown method" 'gh api -X FROBNICATE repos/o/r/pulls'
+expect deny "gh api merge with no fields" 'gh api --method PUT repos/o/r/pulls/4/merge'
+# ...and the reads stay reads, quoted or not.
+expect allow "gh api quoted GET" 'gh api -X "GET" repos/o/r/pulls/4'
+expect allow "gh api HEAD" 'gh api --method HEAD repos/o/r/pulls'
+
 echo "--- never gated ---"
 expect allow "git status" 'git status'
 expect allow "git commit" 'git commit -m "feat: x"'
