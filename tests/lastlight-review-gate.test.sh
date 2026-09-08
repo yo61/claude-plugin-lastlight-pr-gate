@@ -244,6 +244,20 @@ expect allow "a redirect on a plain read" 'gh api repos/o/r/pulls/4 2>&1'
 # verdict turned on a space, and the comment beside the check already claimed
 # an opening paren was handled.
 expect deny "a paren attached to gh" '(gh api repos/o/r/pulls/4/merge -X PUT)'
+# The same shape one spelling later: a backtick substitution left the first
+# word as a backtick glued to `gh`, which never equals `gh`, so the call was
+# not recognised at all. `$( )` was already caught, because a paren separates.
+expect deny "wrapped in backticks" '`gh api repos/o/r/pulls/4/merge -X PUT`'
+expect deny "...and in a command substitution" '$(gh api repos/o/r/pulls/4/merge -X PUT)'
+# Flags arriving FROM a substitution stay denied. This is why the backtick is
+# dropped by the tokenizer rather than split on by the segmenter -- splitting
+# takes the character out of the segment, and the rule that catches this one
+# looks for it there.
+expect deny "flags from a backtick, still" 'gh api repos/o/r/pulls/4/merge `cat /tmp/m`'
+# A backtick-wrapped READ is denied too, which is a deliberate consequence
+# rather than an accident: once recognised, it is a gh api call carrying a
+# substitution, and this rule holds that such a call is not provably a read.
+expect deny "a backtick-wrapped read" '`gh api repos/o/r/pulls/4`'
 expect deny "...nested" '((gh api repos/o/r/pulls/4/merge -X PUT))'
 expect deny "...and backgrounded" '(gh api repos/o/r/pulls/4/merge -X PUT)&'
 expect deny "...the spaced form that already worked" '( gh api repos/o/r/pulls/4/merge -X PUT )'
@@ -454,6 +468,33 @@ touch "$REPO/.git/lastlight-review-gate-off"
 expect allow "push (gate off)" 'git push'
 expect allow "gh pr create (gate off)" 'gh pr create --fill'
 rm -f "$REPO/.git/lastlight-review-gate-off"
+
+echo "--- a PR-open must not answer for a push ---"
+# gate_pr_open used to end the hook: every branch called allow() or deny(), and
+# allow() exits. So with HEAD reviewed, a `gh pr create` allowed the open and
+# the process was gone before the push loop ran -- and an unreviewed ref went
+# to the remote unexamined. Needs a ref that is NOT HEAD, or "HEAD is reviewed"
+# stands in for it and the case passes without testing anything.
+git -C "$REPO" checkout -q -b unreviewed
+echo y > "$REPO/g.txt"
+git -C "$REPO" add g.txt
+git -C "$REPO" commit -qm "feat: second"
+git -C "$REPO" checkout -q main
+# The CURRENT head, not $SHA: an earlier section commits on main, so $SHA has
+# not been HEAD since then. Marking it would have left HEAD unreviewed and
+# every case below would have denied -- for the right verdict and the wrong
+# reason, which is the harder kind to notice.
+REVIEWED_HEAD=$(git -C "$REPO" rev-parse HEAD)
+mark "$REVIEWED_HEAD"
+
+expect allow "the PR-open alone is fine when HEAD is reviewed" 'gh pr create --fill'
+expect deny "...but not the unreviewed ref beside it" \
+  'gh pr create --fill ; git push origin unreviewed'
+expect deny "...nor with &&" 'gh pr ready 42 && git push origin unreviewed'
+expect deny "...and that push alone is denied too" 'git push origin unreviewed'
+expect allow "...while the reviewed HEAD still goes" 'git push origin HEAD'
+unmark
+git -C "$REPO" branch -q -D unreviewed
 
 echo "--- nothing reaches a remote from a work workspace ---"
 # The clone's git dir is writable by the session, so a marker in it proves

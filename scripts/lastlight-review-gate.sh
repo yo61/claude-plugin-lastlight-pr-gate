@@ -391,7 +391,7 @@ gh_api_segment_writes() {
 # gap.
 gh_api_words() {
   awk '
-    BEGIN { SQ = sprintf("%c", 39) }
+    BEGIN { SQ = sprintf("%c", 39); BT = sprintf("%c", 96) }
     {
       w = ""; started = 0; mode = ""
       n = length($0)
@@ -408,6 +408,14 @@ gh_api_words() {
           if (c == "\\" && i < n) { w = w substr($0, ++i, 1); started = 1; continue }
           if (c == SQ)   { mode = "sq"; started = 1; continue }
           if (c == "\"") { mode = "dq"; started = 1; continue }
+          # A backtick is command substitution, not part of the word. Left in,
+          # `gh api ...` wrapped in one began with a backtick glued to `gh`,
+          # which never equals `gh`, so the call went unrecognised -- the paren
+          # form, one spelling later. Dropped here rather than split on in
+          # shell_segments: the rule that gates a call whose flags come from a
+          # substitution reads the raw segment for this character, and taking
+          # it out of the segment would have traded one hole for another.
+          if (c == BT)   { started = 1; continue }
           if (c == " " || c == "\t") {
             if (started) print w
             w = ""; started = 0
@@ -424,16 +432,25 @@ gh_api_words() {
   ' <<< "$1"
 }
 
+# The verdict for a PR-opening command. Returns 0 when that open is fine;
+# denies, and so exits, otherwise.
+#
+# RETURNS rather than allowing, for the same reason gate_push_segment does. An
+# allow ends the hook for the whole command line, and this one ran before the
+# push loop -- so on a branch whose HEAD is reviewed,
+# `gh pr create --fill ; git push origin <unreviewed-branch>` allowed the open
+# and exited, and the unreviewed branch went to the remote unexamined. Every
+# gate here answers for its own invocation and leaves the others to be judged.
 gate_pr_open() {
   local cmd=$1 cwd=$2 target gitdir head
   target=$(resolve_target "$cmd" "$cwd")
-  [[ -n $target && -d $target ]] || allow
-  gitdir=$(git -C "$target" rev-parse --git-dir 2> /dev/null) || allow
+  [[ -n $target && -d $target ]] || return 0
+  gitdir=$(git -C "$target" rev-parse --git-dir 2> /dev/null) || return 0
   [[ $gitdir = /* ]] || gitdir="$target/$gitdir"
-  [[ -e "$gitdir/lastlight-review-gate-off" ]] && allow
-  head=$(git -C "$target" rev-parse HEAD 2> /dev/null) || allow
+  [[ -e "$gitdir/lastlight-review-gate-off" ]] && return 0
+  head=$(git -C "$target" rev-parse HEAD 2> /dev/null) || return 0
   [[ -f "$gitdir/$WORK_SENTINEL" ]] && deny "$(work_sandbox_message "$gitdir")"
-  [[ -f "$gitdir/$MARKER_DIR/$head.json" ]] && allow
+  [[ -f "$gitdir/$MARKER_DIR/$head.json" ]] && return 0
   deny "$(gate_message "$head" "This opens or un-drafts a PR at ${head:0:12}, which has no local review recorded.")"
 }
 
@@ -478,7 +495,6 @@ main() {
   if [[ $opens -eq 1 ]]; then
     gate_pr_open "$cmd" "$cwd"
   fi
-  [[ $has_push -eq 1 ]] || allow
 
   # PER INVOCATION, for the reason gh_api_writes_pulls already splits: the
   # arguments were read out of the whole command line, so
