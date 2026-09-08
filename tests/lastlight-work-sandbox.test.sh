@@ -360,7 +360,7 @@ echo "--- \$HOME's other trees are denied, one entry at a time ---"
 FAKE=$(mktemp -d)
 MYWS=$FAKE/.lastlight/work/repoA-1111/main/repo
 OTHERWS=$FAKE/.lastlight/work/repoB-2222/main/repo
-mkdir -p "$MYWS" "$OTHERWS" "$FAKE/code" "$FAKE/.hidden-sibling"
+mkdir -p "$MYWS" "$OTHERWS" "$FAKE/code" "$FAKE/.hidden-sibling" "$FAKE/..dotdot-sibling"
 fake_siblings() {
   HOME="$FAKE" LASTLIGHT_WORK_ROOT="$FAKE/.lastlight/work" \
     bash -c 'source "$1" 2>/dev/null; home_siblings_denied "" "$2"' _ "$WORK" "$MYWS"
@@ -376,6 +376,24 @@ ok "a visible sibling is enumerated" \
   "$(fake_siblings | grep -cx "$FAKE/code")" "1"
 ok "a HIDDEN sibling is enumerated too" \
   "$(fake_siblings | grep -cx "$FAKE/.hidden-sibling")" "1"
+# Two leading dots is a legal directory name that neither `*` nor `.[!.]*`
+# matches, so such a tree was left out of the deny list altogether.
+ok "a sibling starting with two dots is enumerated" \
+  "$(fake_siblings | grep -cx "$FAKE/..dotdot-sibling")" "1"
+# ...and the directory entries themselves never are.
+ok "neither . nor .. is enumerated" \
+  "$(fake_siblings | grep -cE '/\.\.?$')" "0"
+
+# ...and under the OLD bash too, which is where it matters. bash 5.2 added
+# GLOBSKIPDOTS, so `..*` never yields `..` there and this suite cannot see
+# the difference; the macOS system bash is 3.2, where it does. The hook runs
+# under whichever bash `env bash` finds, which is not necessarily this one.
+if [[ -x /bin/bash ]] && ! /bin/bash -c 'shopt -q globskipdots' 2> /dev/null; then
+  ok "nor under a bash without GLOBSKIPDOTS" \
+    "$(HOME="$FAKE" LASTLIGHT_WORK_ROOT="$FAKE/.lastlight/work" \
+      /bin/bash -c 'source "$1" 2>/dev/null; home_siblings_denied "" "$2"' _ "$WORK" "$MYWS" \
+      | grep -cE '/\.\.?$')" "0"
+fi
 # ...and the chain down to the kept workspace is not denied, or the session
 # could not reach its own tree.
 ok "the chain to the workspace is open" \

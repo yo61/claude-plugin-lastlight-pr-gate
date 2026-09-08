@@ -169,7 +169,13 @@ _deny_below() {
   local dir=$1
   shift
   local keeps=("$@") entry k on_path is_keep
-  for entry in "$dir"/* "$dir"/.[!.]*; do
+  # Three globs, because two do not cover the namespace. `*` skips hidden
+  # entries, `.[!.]*` covers a single leading dot, and neither matches a name
+  # beginning with two -- `..other-project` is a legal directory name and was
+  # left out of the deny list entirely, readable and editable from the session.
+  # `..?*` requires a character after the dots, so `.` and `..` themselves stay
+  # out of it.
+  for entry in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
     [[ -e $entry || -L $entry ]] || continue
     on_path=0
     is_keep=0
