@@ -28,6 +28,9 @@ ok() {
   fi
 }
 
+# shellcheck source=tests/lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+clear_inherited_config
 RUN="${RUN:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)/lastlight-review-run.sh}"
 RUN=$(cd "$(dirname "$RUN")" && printf '%s/%s' "$PWD" "$(basename "$RUN")")
 [[ -f $RUN ]] || {
@@ -388,6 +391,14 @@ ok "git still works under it" "$(git_with_env rev-parse --is-inside-work-tree)" 
 # recorder checks would be computed under a different attributes file.
 ok "they are not exported into this process" \
   "${GIT_CONFIG_COUNT:-unset}${GIT_CONFIG_GLOBAL:-}" "unset"
+# ...and that assertion means something only because the suite cleared these
+# first. Claude Code's own sandbox exports GIT_CONFIG_COUNT=2, so inherited it
+# read the invoking shell rather than the code under test -- and a bare COUNT
+# with no matching KEY makes git fail outright, which took four other suites
+# down with it. The clearing is asserted here so it cannot quietly stop
+# happening.
+ok "the suite cleared the git config it must not inherit" \
+  "$(env | grep -c '^GIT_CONFIG_' || true)" "0"
 
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]

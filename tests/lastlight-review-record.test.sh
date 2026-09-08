@@ -17,6 +17,9 @@ set -uo pipefail
 # broke in CI and in the pre-commit hook for anyone without an install.
 #
 # The override still works, and CI still passes one explicitly.
+# shellcheck source=tests/lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+clear_inherited_config
 RECORD="${RECORD:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)/lastlight-review-record.sh}"
 # Resolve to an ABSOLUTE path up front. Every case below cd's into a throwaway
 # fixture repo before invoking $RECORD, so a relative path stops resolving and

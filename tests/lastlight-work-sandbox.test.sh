@@ -12,6 +12,7 @@ set -uo pipefail
 
 # shellcheck source=tests/lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+clear_inherited_config
 pass=0
 fail=0
 

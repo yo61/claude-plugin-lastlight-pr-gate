@@ -314,8 +314,12 @@ gh_api_segment_writes() {
   # An endpoint spelling the rule has not heard of must not come out a read.
   local names_pulls=0 endpoint
   for ((i = 0; i < n; i++)); do
-    endpoint=${words[i]%%\?*}
-    endpoint=${endpoint%%#*}
+    # Everything the shell or a URL would cut the endpoint at. `?` and `#`
+    # belong to the URL; `>` and `<` are redirections the shell removes before
+    # gh runs, so `repos/o/r/pulls>out` IS the collection endpoint and matched
+    # neither pattern. A set rather than a chain of strips, so the next
+    # character of this kind is a character and not another line.
+    endpoint=${words[i]%%[?#<>]*}
     case $endpoint in
       */pulls | */pulls/* | pulls | pulls/*)
         names_pulls=1

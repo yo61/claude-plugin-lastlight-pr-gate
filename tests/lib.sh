@@ -37,3 +37,27 @@ count_matching() {
   [[ -n $n ]] || n=0
   printf '%s' "$n"
 }
+
+# Clear configuration the tests must not inherit.
+#
+# Claude Code's own sandbox exports GIT_CONFIG_COUNT=2 with safe.directory
+# keys. A bare COUNT with no matching KEY makes git fail outright, so a suite
+# run from a sandboxed session does not report a few odd results -- the gate
+# suite went from 160 passing to 103 FAILING, and the work-sandbox suite could
+# not clone at all. The prek hooks and readme-counts run in that environment
+# when a commit is made from such a session, so the commit fails for a reason
+# that has nothing to do with the commit.
+#
+# One suite also ASSERTS on these variables, to prove the runner sets them on
+# the reviewer's command rather than exporting them. Inheriting them made that
+# assertion read the invoking shell instead of the code under test -- it failed
+# while the thing it describes was working.
+#
+# Only the application's own configuration goes: PATH, HOME, TMPDIR and the
+# locale are what any process needs. A test that wants one of these sets it.
+clear_inherited_config() {
+  local var
+  while IFS= read -r var; do
+    [[ -n $var ]] && unset "$var"
+  done < <(env | awk -F= '/^GIT_CONFIG_[A-Za-z0-9_]*=/ { print $1 }')
+}

@@ -25,6 +25,9 @@ set -uo pipefail
 # broke in CI and in the pre-commit hook for anyone without an install.
 #
 # The override still works, and CI still passes one explicitly.
+# shellcheck source=tests/lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+clear_inherited_config
 GATE="${GATE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)/lastlight-review-gate.sh}"
 pass=0
 fail=0
@@ -259,6 +262,17 @@ expect deny "...a fragment rather than a query" 'gh api -X POST "repos/o/r/pulls
 # to take everything from the FIRST one, or what is left still carries a `?`
 # and matches no endpoint pattern.
 expect deny "...a second ? inside the query" 'gh api -X POST "repos/o/r/pulls?a=1?b=2"'
+# A redirection glued to the endpoint is the same hole through a different
+# character: the shell takes `>out` off before gh runs, so this reaches gh as a
+# POST to the collection endpoint and opens a pull request, while the word
+# `repos/o/r/pulls>out` matched neither pattern and scored a read. */pulls/*
+# still caught `merge>out`, which is how the collection form survived here too.
+expect deny "a redirection glued to the endpoint" 'gh api repos/o/r/pulls>out -f title=x -f head=b -f base=main'
+expect deny "...with an explicit POST" 'gh api repos/o/r/pulls>out -X POST'
+expect deny "...an input redirection" 'gh api repos/o/r/pulls<in -X POST'
+# Redirecting a READ somewhere is still a read: the strip decides what the
+# endpoint is, not what the verdict is.
+expect allow "a redirected read" 'gh api repos/o/r/pulls>out.json'
 # ...and the single-PR form, which was already covered, so the two stay honest
 # about which pattern is doing the work.
 expect deny "a query on a single PR" 'gh api -X PATCH "repos/o/r/pulls/4?x=1"'
