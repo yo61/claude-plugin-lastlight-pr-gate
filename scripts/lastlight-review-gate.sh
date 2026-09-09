@@ -217,43 +217,6 @@ pushed_revs() {
   done
 }
 
-# Opening or un-drafting a PR surfaces HEAD for review. Once pushes are gated
-# this is normally already satisfied; it exists for branches that predate the
-# gate.
-# Whether a `gh api` call could change a pull request.
-#
-# INVERTED, deliberately: gated unless the call is provably a read. Matching the
-# ways of spelling a write failed four times in a row -- `--method=POST`,
-# `-XPOST`, `--method  post`, then `-X "PUT"` -- because gh accepts the value
-# attached, separated, quoted, in any case, and does not validate it. Each
-# revision closed the spelling that had just been found and left the next one
-# open, and every one of those was a silent allow.
-#
-# A read is a call with no field flags and either no method at all (gh defaults
-# to GET) or a method that is explicitly GET or HEAD. Anything else -- an
-# unrecognised spelling, a quoted value, a method this rule has never heard of
-# -- is treated as a write and gated. The cost of being wrong is now a refusal
-# someone will report, rather than a mutation nobody sees.
-gh_api_creates_pr_anywhere() {
-  local cmd=$1 seg
-  # PER INVOCATION. "The last flag wins" is true inside one gh call and not
-  # across a command line: reading the whole string as one let a real write be
-  # cancelled by an unrelated read chained after it --
-  # `gh api .../pulls/4/merge -X PUT ; gh api .../other -X GET` came out a read.
-  #
-  # Splitting on separators without minding quotes can cut a segment in half,
-  # which at worst makes a read look like a write. That is the direction this
-  # gate should err in.
-  while IFS= read -r seg; do
-    gh_api_creates_pr "$seg" && return 0
-    # `read` returns non-zero on a final line with no newline, which skips the
-    # loop body entirely -- so an unchained command, the common case, was never
-    # examined at all. The trailing newline is what makes the last segment a
-    # line like any other.
-  done < <(shell_segments "$cmd")
-  return 1
-}
-
 # One line per shell segment, splitting on `;`, `&`, `|` and parens only
 # where the shell would: outside quotes, unescaped.
 #
@@ -409,11 +372,12 @@ gh_api_creates_pr() {
   local n=${#words[@]}
   [[ $n -gt 1 ]] || return 1
 
-  local is_api=0
+  local is_api=0 api_at=-1
   for ((i = 0; i + 1 < n; i++)); do
     if [[ ${words[i]} == gh && ${words[i + 1]} == api ]]; then
       in_command_position "$i" "${words[@]}" || continue
       is_api=1
+      api_at=$i
       break
     fi
   done
@@ -423,17 +387,31 @@ gh_api_creates_pr() {
   # `repos/o/r/pulls/4/merge` merges, and merging is not this plugin's
   # business. The query string and any redirection come off first, because gh
   # takes a query in the endpoint and the shell takes the redirection away.
-  local names_collection=0 endpoint
-  for ((i = 0; i < n; i++)); do
-    endpoint=${words[i]%%[?#<>]*}
-    case $endpoint in
-      */pulls | pulls)
-        names_collection=1
-        break
+  #
+  # THE FIRST POSITIONAL after `gh api`, not any word that happens to end in
+  # /pulls. Scanning every word meant a flag VALUE marked the call: `gh api
+  # repos/o/r/issues -f body=docs/pulls` was refused, with a message about
+  # opening a pull request, for a write to an endpoint this plugin does not
+  # gate. Flags are skipped, and the ones taking a separate value take it too.
+  local names_collection=0 endpoint k
+  k=$((api_at + 2))
+  while [[ $k -lt $n ]]; do
+    case ${words[k]} in
+      -f | -F | --field | --raw-field | --input | -H | --header | -X | --method | \
+        -q | --jq | -t | --template | --hostname | --cache | -p | --preview)
+        k=$((k + 2))
         ;;
-      *) ;; # not a pulls collection
+      -*) k=$((k + 1)) ;;
+      *) break ;;
     esac
   done
+  if [[ $k -lt $n ]]; then
+    endpoint=${words[k]%%[?#<>]*}
+    case $endpoint in
+      */pulls | pulls) names_collection=1 ;;
+      *) ;; # not a pulls collection
+    esac
+  fi
   [[ $names_collection -eq 1 ]] || return 1
 
   # The method first, because it decides what the field flags MEAN. The LAST
@@ -601,19 +579,24 @@ main() {
   #
   # Everything below is decided from words. The parse was never the expensive
   # part; the git work is, and that still sits behind these tests.
-  local opens=0 s
-  # PER SEGMENT, like the other two scans. Handing the whole command line to a
-  # function written for a segment meant `(gh pr create --fill)` tokenised as
-  # `(gh` and matched nothing -- shell_words does not split on separators, that
-  # is what shell_segments is for. The base grep was anchored on those
-  # characters and caught it.
+  # PER SEGMENT, like the push scan, and for two reasons. Handing a whole
+  # command line to a function written for a segment meant `(gh pr create)`
+  # tokenised as `(gh` and matched nothing. And the DIRECTORY has to come from
+  # the prefix up to the call, not from the whole line: resolve_target takes
+  # the last `cd` it can see, so a `cd` in a later segment -- or inside a
+  # closed subshell -- decided where a PR-open was judged. Allowed when that
+  # named an opted-out repository, denied when it named an unreviewed one.
+  local opens=0 s pr_prefix="" opens_prefix=""
   while IFS= read -r s; do
-    segment_opens_pr "$s" && opens=1
+    pr_prefix="$pr_prefix$s;"
+    if [[ $opens -eq 0 ]] && { segment_opens_pr "$s" || gh_api_creates_pr "$s"; }; then
+      opens=1
+      opens_prefix=$pr_prefix
+    fi
   done < <(shell_segments "$cmd")
-  gh_api_creates_pr_anywhere "$cmd" && opens=1
 
   if [[ $opens -eq 1 ]]; then
-    gate_pr_open "$cmd" "$cwd"
+    gate_pr_open "$opens_prefix" "$cwd"
   fi
 
   # PER INVOCATION, for the reason gh_api_creates_pr_anywhere already splits: the

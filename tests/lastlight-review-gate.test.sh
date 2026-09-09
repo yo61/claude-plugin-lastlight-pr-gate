@@ -525,6 +525,46 @@ expect deny "...after &&" 'true && gh pr create --fill'
 # not, so the rule is one function now and both ask it.
 expect allow "prose mentioning gh pr create" 'echo gh pr create --fill'
 
+echo "--- a PR-open is judged where it runs ---"
+# gate_pr_open was handed the WHOLE command line, and resolve_target takes the
+# last `cd` it can see -- including one in a segment AFTER the call. So a
+# PR-open was judged against a directory it never runs in: allowed when a later
+# cd named an opted-out repository, denied when it named an unreviewed one.
+# The same defect was fixed for pushes earlier and never carried across.
+PR_OPTOUT=$TMP/propt
+mkdir -p "$PR_OPTOUT"
+git init -q -b main "$PR_OPTOUT"
+git -C "$PR_OPTOUT" config user.email t@t
+git -C "$PR_OPTOUT" config user.name t
+echo x > "$PR_OPTOUT/f.txt"
+git -C "$PR_OPTOUT" add f.txt
+git -C "$PR_OPTOUT" commit -qm "feat: initial"
+touch "$PR_OPTOUT/.git/lastlight-review-gate-off"
+
+unmark
+expect deny "a cd AFTER the open does not excuse it" \
+  "gh pr create --fill ; cd $PR_OPTOUT"
+mark "$(git -C "$REPO" rev-parse HEAD)"
+# ...and the other direction: a later cd to an unreviewed place must not deny a
+# PR-open that is fine here. That one is the class 1 half.
+expect allow "...nor deny one that is fine here" \
+  "gh pr create --fill ; cd $TMP"
+unmark
+# A cd BEFORE the call still counts, because that really does move where it runs.
+expect allow "a cd before the open still counts" \
+  "cd $PR_OPTOUT && gh pr create --fill"
+
+echo "--- the gh endpoint is the first positional, not any word ---"
+# The scan looked at EVERY word, so a flag VALUE ending in /pulls marked the
+# call: an issues write was refused, with a message about opening a pull
+# request, for an endpoint this plugin does not gate.
+expect allow "a flag value ending in pulls" 'gh api repos/o/r/issues -f body=docs/pulls'
+expect allow "...in a jq filter" 'gh api repos/o/r/issues --jq .x/pulls'
+expect allow "...in a header" 'gh api repos/o/r/issues -H x:docs/pulls'
+# ...while the endpoint itself still gates, wherever the flags sit around it.
+expect deny "the real endpoint, flags after" 'gh api repos/o/r/pulls -f title=x'
+expect deny "...flags before" 'gh api -H accept:json repos/o/r/pulls -f title=x'
+
 echo "--- a PR-open must not answer for a push ---"
 # gate_pr_open used to end the hook: every branch called allow() or deny(), and
 # allow() exits. So with HEAD reviewed, a `gh pr create` allowed the open and

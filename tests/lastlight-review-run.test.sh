@@ -110,8 +110,14 @@ ok "the runner asks the resolver, not a name nobody runs" \
   "$(grep -c 'sandbox_timeout_cmd' "$RUN")" "2"
 ok "no call site execs a literal timeout" \
   "$(grep -cE '(^|[^_])timeout [0-9$]' "$RUN")" "0"
-# ...and the resolver answers with whichever spelling is present.
-ok "it picks the plain name when both exist" "$(sandbox_timeout_cmd)" "timeout"
+# ...and whatever it names is a command that exists. NOT "it returns timeout":
+# on a machine carrying only gtimeout the resolver correctly says so and the
+# runner works fine, and that assertion took the suite, the prek hook and
+# readme-counts down with it. A `command -v` guard would have made the printed
+# total vary by machine, which readme-counts compares -- so the assertion is
+# machine-independent instead of conditional.
+ok "the resolver names a command that exists" \
+  "$(command -v "$(sandbox_timeout_cmd)" > /dev/null 2>&1 && echo yes || echo no)" "yes"
 
 ok "--model without a value is rejected" "$(refused --model)" "lastlight-review-run: --model needs a value"
 # A base ref with --working-tree is two different answers to "review what?",
