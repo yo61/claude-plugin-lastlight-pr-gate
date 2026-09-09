@@ -442,6 +442,37 @@ unmark
 expect deny "a force refspec on an unreviewed ref" 'git push origin +other'
 expect deny "...behind a push option" 'git push -o ci.skip origin other'
 
+echo "--- a heredoc body is data, not shell ---"
+# The segmenter scanned the body, so an apostrophe in a commit message opened a
+# quote span that swallowed the rest of the buffer -- and the push chained
+# after the heredoc failed to tokenise and was skipped entirely. Committing
+# from a heredoc and then pushing is about as ordinary as this gets.
+unmark
+expect deny "a push after a heredoc whose body has an apostrophe" \
+  "git commit -qF- <<EOF${NL}fix: don$'t break${NL}EOF${NL}git push origin main"
+# ...and the same through a substitution, where the quote AFTER the closing
+# paren used to re-open a span and swallow what followed.
+expect deny "...through a quoted substitution" \
+  "git commit -m \"\$(cat <<'EOF'${NL}fix: something${NL}EOF${NL})\" && git push origin main"
+expect deny "...with an indented delimiter" \
+  "git commit -qF- <<-EOF${NL}fix: x${NL}EOF${NL}git push origin main"
+# A heredoc with no push after it is still not a push.
+expect allow "a heredoc alone" "cat <<EOF${NL}don$'t break${NL}EOF"
+# `<<<` is a herestring, not a heredoc, and must not swallow anything.
+expect deny "a herestring does not start a body" \
+  "grep x <<< hello${NL}git push origin main"
+
+echo "--- the remote is not a ref ---"
+# `git push \"$REMOTE\" main` was denied for naming a ref through an expansion,
+# when the refs were literal: the expansion was the REMOTE, whose identity
+# never changes which SHAs land, markers being repo-local and keyed by SHA. The
+# refusal told the caller to name the ref literally, which they had.
+mark "$(git -C "$REPO" rev-parse HEAD)"
+expect allow "a remote from a variable" 'git push "$REMOTE" main'
+expect allow "...with no ref at all" 'git push "$REMOTE"'
+expect deny "...while a REF from one is still refused" 'git push origin $BRANCH'
+unmark
+
 echo "--- a trailing comment is not part of the command ---"
 # The words after an unquoted `#` landed in the push argument list, so the gate
 # read a commented-out flag as the pushs own and allowed a real push.

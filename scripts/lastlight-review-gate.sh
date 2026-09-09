@@ -182,7 +182,15 @@ pushed_revs() {
         # caller to name the ref literally, which they had. Here it sees only
         # tokens that reached ref position, because flags and redirections have
         # already been skipped above.
-        seen_remote=1
+        #
+        # ...and because the REMOTE is consumed first. `git push "$REMOTE" main`
+        # was denied for naming a ref through an expansion, when the refs were
+        # literal and the expansion was the remote -- whose identity never
+        # changes which SHAs land, markers being repo-local and keyed by SHA.
+        if [[ $seen_remote -eq 0 ]]; then
+          seen_remote=1
+          continue
+        fi
         printf '?\n'
         continue
         ;;
@@ -258,6 +266,8 @@ shell_segments() {
     END {
       seg = ""
       mode = ""
+      heredoc = ""
+      resume_dq = 0
       prev_ws = 1
       n = length(buf)
       for (i = 1; i <= n; i++) {
@@ -290,6 +300,12 @@ shell_segments() {
           # parseable AND still show that an expansion was in it, because that
           # is what the refusal downstream rests on.
           if (c == "$" && i < n && substr(buf, i + 1, 1) == "(") {
+            # Remember that we were inside double quotes, so the closing paren
+            # can put us back. Without that the quote AFTER the substitution
+            # re-opened a span and swallowed everything following it -- so
+            # `git commit -m "$(cat <<EOF ... EOF)" && git push` never showed a
+            # push at all.
+            resume_dq = 1
             print seg "$\""; seg = ""; mode = ""; i++; continue
           }
           if (c == BT) { print seg c "\""; seg = ""; mode = ""; continue }
@@ -299,6 +315,55 @@ shell_segments() {
           if (c == "\\" && i < n) { seg = seg c substr(buf, ++i, 1); continue }
           if (c == SQ)   { mode = "sq"; seg = seg c; continue }
           if (c == "\"") { mode = "dq"; seg = seg c; continue }
+          # A heredoc body is DATA, not shell. Scanning it meant an
+          # apostrophe in a commit message opened a quote span that swallowed
+          # the rest of the buffer, so a push chained after the heredoc failed
+          # to tokenize and was skipped entirely. (No apostrophes in this
+          # comment: it lives inside a single-quoted awk program.)
+          # `git commit -F- <<EOF ... EOF` then a push is an ordinary shape.
+          #
+          # The delimiter is remembered here and the body skipped at the next
+          # newline, which is where it starts. `<<<` is a herestring and is
+          # left alone.
+          if (c == "<" && substr(buf, i + 1, 1) == "<" && substr(buf, i + 2, 1) != "<" \
+            && (i == 1 || substr(buf, i - 1, 1) != "<")) {
+            j = i + 2
+            if (substr(buf, j, 1) == "-") j++
+            while (j <= n && (substr(buf, j, 1) == " " || substr(buf, j, 1) == "\t")) j++
+            hd = ""
+            hq = ""
+            if (substr(buf, j, 1) == SQ || substr(buf, j, 1) == "\"") { hq = substr(buf, j, 1); j++ }
+            while (j <= n) {
+              hc = substr(buf, j, 1)
+              if (hq != "" && hc == hq) { j++; break }
+              if (hq == "" && (hc == " " || hc == "\t" || hc == "\n" || hc == ";" || hc == "&" || hc == "|")) break
+              hd = hd hc
+              j++
+            }
+            if (hd != "") { heredoc = hd }
+            seg = seg substr(buf, i, j - i)
+            i = j - 1
+            continue
+          }
+          # At the newline that starts a pending heredoc body, skip to the
+          # line that closes it. The body never reaches the quote scanner.
+          if (c == "\n" && heredoc != "") {
+            j = i + 1
+            while (j <= n) {
+              e = index(substr(buf, j), "\n")
+              line = (e > 0) ? substr(buf, j, e - 1) : substr(buf, j)
+              stripped = line
+              sub(/^[\t]+/, "", stripped)
+              if (stripped == heredoc) { j = (e > 0) ? j + e : n + 1; break }
+              if (e == 0) { j = n + 1; break }
+              j += e
+            }
+            heredoc = ""
+            i = j - 1
+            print seg
+            seg = ""
+            continue
+          }
           # A newline outside quotes separates commands.
           #
           # This IS redundant with the caller, which reads segments a line at a
@@ -312,6 +377,11 @@ shell_segments() {
           #
           # (No apostrophes in here. This comment sits inside a
           # single-quoted awk program, and one of them closed the string.)
+          if (c == ")" && resume_dq) {
+            # Back inside the double-quoted string the substitution sat in.
+            resume_dq = 0
+            print seg; seg = ""; mode = "dq"; continue
+          }
           if (c == "\n" || c == ";" || c == "|" || c == "(" || c == ")") {
             print seg; seg = ""; continue
           }
