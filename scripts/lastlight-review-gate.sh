@@ -347,6 +347,12 @@ shell_segments() {
               hd = hd hc
               j++
             }
+            # An UNQUOTED delimiter has to look like a word, or shell
+            # arithmetic registers one: `$((1<<2))` gave the delimiter `2))`,
+            # which no line ever matches, so the scanner ate the rest of the
+            # buffer and every later command went unjudged. Quoted delimiters
+            # keep their own shape, since <<"END OF FILE" is legal.
+            if (hq == "" && hd !~ /^[A-Za-z_][A-Za-z0-9_]*$/) { hd = "" }
             if (hd != "") { heredoc = hd }
             seg = seg substr(buf, i, j - i)
             i = j - 1
@@ -934,6 +940,15 @@ gate_push_segment() {
     # never fire and no test could reach it. sandbox_probe_verdict says why
     # that matters: a redundant check in a security control cannot be tested,
     # so it rots while reading as defence in depth.
+    # A tag pushed by bare name. `--tags`, `refs/tags/<name>` and `tag <name>`
+    # are all recognised from the command line; `git push origin v1.2.3` cannot
+    # be, so it is asked of the repository instead. Tag pushes are out of scope
+    # per docs/gate-contract.md, and this spelling is the ordinary one -- it was
+    # resolving to the tagged commit and being refused for want of a review.
+    if git -C "$target" show-ref --verify --quiet "refs/tags/$rev"; then
+      continue
+    fi
+
     if [[ ! -f "$gitdir/$MARKER_DIR/$sha.json" ]]; then
       deny "$(gate_message "$sha" "${sha:0:12} (${rev}) has no local review recorded, and pushing it puts an unreviewed SHA on the remote.")"
     fi

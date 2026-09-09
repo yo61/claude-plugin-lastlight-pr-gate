@@ -394,6 +394,19 @@ expect deny "a quoted substitution, with HEAD reviewed" 'git push origin "$(echo
 expect allow "...while a literal HEAD still goes" 'git push origin HEAD'
 unmark
 
+echo "--- a tag pushed by bare name lands nothing ---"
+# `--tags`, `refs/tags/<name>` and `tag <name>` are recognisable from the
+# command line; `git push origin v1.2.3` is not, so it is asked of the
+# repository. Tag pushes are out of scope per docs/gate-contract.md, and this
+# is the ordinary spelling -- it resolved to the tagged commit and was refused
+# for want of a review.
+unmark
+expect allow "a tag by bare name" 'git push origin v1'
+expect allow "...the refs/tags form" 'git push origin refs/tags/v1'
+expect allow "...the tag <name> form" 'git push origin tag v1'
+# ...while a BRANCH by bare name is still gated, or the fix is just a hole.
+expect deny "a branch by bare name is still gated" 'git push origin other'
+
 echo "--- ordinary push spellings of a REVIEWED sha ---"
 mark "$(git -C "$REPO" rev-parse HEAD)"
 # A `$` ANYWHERE in the segment used to deny, so a push whose refs were literal
@@ -443,6 +456,18 @@ expect deny "a force refspec on an unreviewed ref" 'git push origin +other'
 expect deny "...behind a push option" 'git push -o ci.skip origin other'
 
 echo "--- a heredoc body is data, not shell ---"
+# ...but shell arithmetic is not a heredoc. `$((1<<2))` registered a pending
+# delimiter of `2))`, which no line matches, so the scanner ate the rest of the
+# buffer and every later command went unjudged. An unquoted delimiter has to
+# look like a word.
+expect deny "arithmetic left-shift is not a heredoc" \
+  "echo \$((1<<2))${NL}git push origin main"
+expect deny "...right-shift, for contrast" \
+  "echo \$((8>>2))${NL}git push origin main"
+# A quoted delimiter may contain spaces, so the word-shape rule above applies
+# only to unquoted ones. Without this case that distinction was untested.
+expect deny "a quoted delimiter with spaces in it" \
+  "cat <<'END OF FILE'${NL}don't${NL}END OF FILE${NL}git push origin main"
 # The segmenter scanned the body, so an apostrophe in a commit message opened a
 # quote span that swallowed the rest of the buffer -- and the push chained
 # after the heredoc failed to tokenise and was skipped entirely. Committing
