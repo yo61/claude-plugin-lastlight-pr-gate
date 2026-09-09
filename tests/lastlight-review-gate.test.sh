@@ -455,6 +455,16 @@ unmark
 expect deny "a force refspec on an unreviewed ref" 'git push origin +other'
 expect deny "...behind a push option" 'git push -o ci.skip origin other'
 
+echo "--- a nested quoted substitution ---"
+# resume_dq was a boolean, so the INNER paren consumed it; the outer quote then
+# opened a phantom span and the rest of the line became one untokenizable
+# segment that both scans skipped. It counts depth now.
+unmark
+expect deny "a push after a nested substitution" \
+  'git commit -m "$(basename "$(pwd)")" && git push origin main'
+expect deny "...and after a single one, for contrast" \
+  'git commit -m "$(pwd)" && git push origin main'
+
 echo "--- a heredoc body is data, not shell ---"
 # ...but shell arithmetic is not a heredoc. `$((1<<2))` registered a pending
 # delimiter of `2))`, which no line matches, so the scanner ate the rest of the

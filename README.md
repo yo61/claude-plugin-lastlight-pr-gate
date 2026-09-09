@@ -297,9 +297,9 @@ for t in tests/*.test.sh; do bash "$t"; done
 
 | suite | cases | covers |
 |---|---|---|
-| `lastlight-review-gate.test.sh` | 213 | what is gated, what is allowed through |
+| `lastlight-review-gate.test.sh` | 215 | what is gated, what is allowed through |
 | `lastlight-review-record.test.sh` | 13 | the pass bar and the attestation binding |
-| `lastlight-review-run.test.sh` | 76 | flag parsing, the prompt, the defaults, the tool allowlist, and what may cross back out of the sandbox |
+| `lastlight-review-run.test.sh` | 79 | flag parsing, the prompt, the defaults, the tool allowlist, and what may cross back out of the sandbox |
 | `lastlight-sandbox.test.sh` | 101 | review isolation, the containment verdict, and what the branch may not own |
 | `lastlight-work-sandbox.test.sh` | 117 | work isolation, policy spelling, landing |
 

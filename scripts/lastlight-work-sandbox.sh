@@ -425,6 +425,12 @@ Then stop."
   # still reported containment -- the same fail-open as before, one level up.
   # Granting the tool leaves the deny rules as the only thing that can stop it,
   # which is precisely the claim being tested.
+  # Prechecked, for the reason the runner prechecks: a machine with no timeout
+  # command runs the empty string here, `|| true` eats the 127, the report is
+  # absent, and start dies blaming the sandbox policy instead of the missing
+  # tool. macOS ships neither spelling.
+  [[ -n $(sandbox_timeout_cmd) ]] \
+    || die "no timeout command on PATH (looked for timeout and gtimeout). macOS ships neither; install GNU coreutils."
   "$(sandbox_timeout_cmd)" 180 claude -p "$prompt" \
     --settings "$settings" --model haiku \
     --allowedTools "$(work_probe_tools)" < /dev/null > /dev/null 2>&1 || true

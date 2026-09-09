@@ -134,6 +134,7 @@ main() {
     die "the working tree has uncommitted changes outside .lastlight/. The diff under review is base...HEAD, but the reviewer reads the live tree, so the two would disagree. Commit or stash first, or pass --working-tree to review the uncommitted state itself."
   fi
 
+  refuse_symlinked_outputs "$root"
   mkdir -p "$OUT_DIR"
 
   # Three-dot: what this branch adds, not what main did meanwhile (SKILL.md §3).
@@ -366,6 +367,29 @@ main() {
 # Refuse rather than copy carefully: nothing legitimate needs the artifact to
 # be anything but a plain file. The reviewer session has exited by now, so no
 # one can swap the path between this check and the copy.
+# Refuse to write through anything the branch committed at the runner's own
+# paths, in the REAL repository.
+#
+# The workspace copy of this problem is handled by moving those names aside;
+# that is wrong here, because this is the user's working tree and
+# .lastlight/pr-review holds the artefacts of previous runs. So the targets are
+# checked and a symlink is refused.
+#
+# It matters because these writes happen BEFORE any workspace exists: this
+# process, outside any sandbox, with the user's privileges, on a checkout of
+# the branch under review -- which this script's own doctrine calls untrusted
+# input. Reproduced before the fix: a file outside the repository was
+# overwritten with the runner's own output.
+refuse_symlinked_outputs() {
+  local root=$1 p
+  for p in ".lastlight" "$OUT_DIR" "$OUT_DIR/diff.patch" "$OUT_DIR/findings.json" \
+    "$OUT_DIR/attestation.json"; do
+    if [[ -L "$root/$p" ]]; then
+      die "$root/$p is a symlink. This runner writes there with your privileges, before any sandbox exists, so it will not follow it. Remove or replace it."
+    fi
+  done
+}
+
 findings_contained() {
   local ws=$1 path=$1/$OUT_DIR/findings.json dir root
 

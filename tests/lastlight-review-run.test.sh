@@ -319,6 +319,32 @@ ok "the prompt names that exact path" \
 # ...and not the absolute form, which the rule would not match.
 ok "the prompt does not ask for an absolute write" \
   "$([[ $PROMPT == *"/some/root/$WPATH"* ]] && echo yes || echo no)" "no"
+echo "--- the runner must not write through a committed symlink ---"
+# These writes happen in the REAL repository, before any workspace exists --
+# this process, outside any sandbox, with the user's privileges, on a checkout
+# of the branch under review. A branch that commits a symlink at
+# .lastlight/pr-review/diff.patch redirects the write anywhere. Reproduced
+# before the fix: a file outside the repository was overwritten with the
+# runner's own output.
+#
+# The workspace copy of this is handled by moving the names aside; that is
+# wrong here, because this is the user's working tree and the directory holds
+# the artefacts of previous runs.
+RS=$(mktemp -d)
+mkdir -p "$RS/repo/.lastlight/pr-review"
+printf 'original\n' > "$RS/victim"
+ln -s "$RS/victim" "$RS/repo/.lastlight/pr-review/diff.patch"
+
+ok "a symlink at an output path is refused" \
+  "$( (refuse_symlinked_outputs "$RS/repo") 2>&1 | grep -c 'is a symlink' || true)" "1"
+ok "...and the target is untouched" "$(cat "$RS/victim")" "original"
+# An ordinary directory with real files has to pass, or the guard blocks every
+# run rather than the one case it is for.
+rm -f "$RS/repo/.lastlight/pr-review/diff.patch"
+printf 'x\n' > "$RS/repo/.lastlight/pr-review/diff.patch"
+ok "an ordinary output directory passes" \
+  "$( (refuse_symlinked_outputs "$RS/repo") 2>&1 | grep -c 'is a symlink' || true)" "0"
+
 echo "--- findings_contained: the copy-back must not follow a link out ---"
 # Ground truth, not a mock: real directories, real links, and the same helper
 # `main` calls. The escape this closes was reproduced first -- a symlink at

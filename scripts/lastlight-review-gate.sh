@@ -312,7 +312,7 @@ shell_segments() {
             # re-opened a span and swallowed everything following it -- so
             # `git commit -m "$(cat <<EOF ... EOF)" && git push` never showed a
             # push at all.
-            resume_dq = 1
+            resume_dq++
             print seg "$\""; seg = ""; mode = ""; i++; continue
           }
           if (c == BT) { print seg c "\""; seg = ""; mode = ""; continue }
@@ -390,9 +390,14 @@ shell_segments() {
           #
           # (No apostrophes in here. This comment sits inside a
           # single-quoted awk program, and one of them closed the string.)
-          if (c == ")" && resume_dq) {
+          if (c == ")" && resume_dq > 0) {
             # Back inside the double-quoted string the substitution sat in.
-            resume_dq = 0
+            #
+            # A COUNT, not a flag. Nested -- "$(a "$(b)")" -- the inner paren
+            # consumed a boolean, the outer quote then opened a phantom span,
+            # and the rest of the line became one untokenizable segment that
+            # both scans skipped.
+            resume_dq--
             print seg; seg = ""; mode = "dq"; continue
           }
           if (c == "\n" || c == ";" || c == "|" || c == "(" || c == ")") {
