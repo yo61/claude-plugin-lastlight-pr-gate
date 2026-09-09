@@ -28,9 +28,16 @@ clear_inherited_config
 pass=0
 fail=0
 
+# EXITS, like the runner's does. It used to return, so a function under test
+# ran on past its own refusal and the assertion described the harness rather
+# than the code -- and one case had to redefine this inside a subshell to get
+# the real behaviour back, which then needed a linter exception to explain.
+# A harness that models the thing under test incorrectly costs more than it
+# saves. Every call here that can die already runs in a subshell, so exiting
+# ends that and nothing else.
 die() {
   printf 'die: %s\n' "$1" >&2
-  return 1
+  exit 1
 }
 # shellcheck disable=SC1090  # path resolved at runtime from $SANDBOX
 source "$SANDBOX"
@@ -400,18 +407,9 @@ SA=$TMP/stageassets
 mkdir -p "$SA/.lastlight-assets/skills/pr-review"
 printf 'ATTACKER\n' > "$SA/.lastlight-assets/skills/pr-review/SKILL.md"
 
-# In a subshell with a die that EXITS, the way it does in the runner: this
-# suite's die returns instead, so the function under test would carry on past
-# its own precondition and the assertion would describe the harness.
-sa_out=$(
-  # shellcheck disable=SC2329  # invoked indirectly, by the function under
-  # test: it shadows this suite's die, which returns where the runner's exits.
-  die() {
-    printf 'die: %s\n' "$1" >&2
-    exit 1
-  }
-  sandbox_stage_assets "$REAL" "$SA" 2>&1
-) || true
+# In a subshell, because the suite's die exits the way the runner's does -- so
+# this ends the substitution and the suite carries on.
+sa_out=$(sandbox_stage_assets "$REAL" "$SA" 2>&1) || true
 ok "staging refuses a .lastlight-assets that is already there" \
   "$(grep -c 'refusing to stage' <<< "$sa_out")" "1"
 # One SKILL.md, not two: had the copy run, the real skill would be sitting at

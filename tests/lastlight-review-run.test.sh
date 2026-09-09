@@ -374,12 +374,7 @@ ok "nothing written at all is refused" "$(contained "$WS")" "no"
 WS=$(fc_ws toolgone)
 printf '{"findings":[]}\n' > "$WS/$OUT_DIR/findings.json"
 ok "...and so is a file whose link count could not be read" \
-  "$(
-    # shellcheck disable=SC2329  # invoked indirectly: this shadows the
-    # binary that findings_contained calls, which is the whole test.
-    find() { return 127; }
-    contained "$WS"
-  )" "no"
+  "$(PATH=/nonexistent contained "$WS")" "no"
 ok "the same file passes when find works" "$(contained "$WS")" "yes"
 
 echo "--- reviewer_git_env: git must be quiet AND still work ---"
