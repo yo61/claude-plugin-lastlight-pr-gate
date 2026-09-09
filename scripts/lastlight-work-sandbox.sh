@@ -297,9 +297,21 @@ work_registry_add() {
   done
 
   work_registry_entry "$ws" > /dev/null && return 0
-  local n=1
-  while [[ -e "$dir/$n" ]]; do n=$((n + 1)); done
-  printf '%s\n%s\n' "$ws" "$root" > "$dir/$n" \
+
+  # mktemp, not the first free number. The NAME carries nothing -- every reader
+  # scans the directory and matches on the first line -- so picking one by
+  # counting up to a free slot bought no meaning and cost atomicity: the scan
+  # and the write were two operations with a gap, and two `start` calls racing
+  # computed the same name, the second overwriting the first. `list` exists
+  # because several workspaces are open at once, so that race is the documented
+  # way to use this.
+  #
+  # A lost entry is not a lost file. A workspace missing from the registry is
+  # invisible to the gate, which then falls back to the marker in the clone's
+  # own git dir -- the forgeable signal the registry replaced.
+  local entry
+  entry=$(mktemp "$dir/wsXXXXXXXX") || die "could not record the workspace in $dir"
+  printf '%s\n%s\n' "$ws" "$root" > "$entry" \
     || die "could not record the workspace in $dir"
 }
 

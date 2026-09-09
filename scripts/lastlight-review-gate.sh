@@ -108,6 +108,37 @@ deny() {
 # `sed -E` throughout: BSD sed's BRE has no `\|` alternation (a GNU extension),
 # so `\(cd\|pushd\)` silently matches NOTHING on macOS -- which is exactly how
 # `cd repo && git push` leaked past an earlier version of this gate.
+# Where a `cd` or `pushd` in the preceding text would have left the shell.
+#
+# PARSED, not matched. This read the raw text with a sed, so `cd <path>`
+# counted anywhere it appeared -- including inside a quoted string that the
+# shell never runs as a command. A commit message naming a path redirected the
+# push to that path and refused it there, which for an already-reviewed push is
+# the mistake this gate is least allowed to make. The `git -C` half of this
+# function was rewritten for exactly that reason; this half was left behind.
+#
+# Recognition and extraction from ONE parse, like everything else here.
+#
+# The LAST one wins, because that is where the shell ends up.
+cd_target() {
+  local seg w first p=""
+  while IFS= read -r seg; do
+    first=1
+    while IFS= read -r w; do
+      if [[ $first -eq 1 ]]; then
+        # Command position only. A `cd` sitting in someone else's argument list
+        # moves nothing.
+        [[ $w == cd || $w == pushd ]] || break
+        first=0
+        continue
+      fi
+      [[ -n $w ]] && p=$w
+      break
+    done < <(shell_words "$seg")
+  done < <(shell_segments "$1")
+  printf '%s' "$p"
+}
+
 resolve_target() {
   local cmd=$1 fallback=$2 explicit=${3:-} p
   # The command's OWN directory, when the caller could parse one, rather than
@@ -116,13 +147,10 @@ resolve_target() {
   # the line decided where a later push was judged -- and with one opted-out
   # repository anywhere on disk that was a one-line bypass.
   p=$explicit
-  if [[ -z $p ]]; then
-    p=$(sed -E -n 's/.*(^|[^[:alnum:]_-])(cd|pushd)[[:space:]]+([^;&|)]*).*/\3/p' <<< "$cmd" | head -1 | sed 's/[[:space:]]*$//')
-  fi
-  p=${p%\"}
-  p=${p#\"}
-  p=${p%\'}
-  p=${p#\'}
+  [[ -n $p ]] || p=$(cd_target "$cmd")
+  # No quote stripping: both sources are parsed words, and the tokeniser has
+  # already taken the quotes off and kept `cd "/a b/c"` as one word. Peeling
+  # one leading and one trailing quote by hand is what a text match needed.
   p=${p/#\~/$HOME}
   # A relative path is relative to where the COMMAND runs, not to wherever this
   # hook happens to have been started. `git -C . -c x=y push` resolved `.` in

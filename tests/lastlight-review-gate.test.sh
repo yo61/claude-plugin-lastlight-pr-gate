@@ -580,6 +580,46 @@ touch "$REPO/.git/lastlight-review-gate-off"
 expect allow "this repo's own opt-out still applies" 'git push origin main'
 rm -f "$REPO/.git/lastlight-review-gate-off"
 
+echo "--- a cd inside a quoted string is not a cd ---"
+# The cd/pushd fallback read the RAW command with a sed, so `cd <path>`
+# counted wherever it appeared -- including inside a quoted string the shell
+# never runs. The `git -C` half of resolve_target was rewritten for exactly
+# this reason and this half was left behind.
+#
+# Both directions are wrong. Toward allow, a message naming the opted-out
+# checkout above turns a refusal into a pass:
+unmark
+expect deny "a quoted path does not redirect the verdict" \
+  "git commit -m \"cd $OPTOUT\" && git push origin main"
+# ...and toward deny, which is the one that matters more. Here the push is
+# reviewed and ought to go: judged against some other directory it is refused,
+# and a false refusal of an already-reviewed push is the worst thing this gate
+# can do.
+#
+# A real repository with no marker, not just any path. Naming somewhere that is
+# not a repository at all let resolve_target fall back to the command's own
+# directory, so the case passed with the bug in place and measured nothing.
+UNREVIEWED=$TMP/unreviewed
+mkdir -p "$UNREVIEWED"
+git init -q -b main "$UNREVIEWED"
+git -C "$UNREVIEWED" config user.email t@t
+git -C "$UNREVIEWED" config user.name t
+echo x > "$UNREVIEWED/f.txt"
+git -C "$UNREVIEWED" add f.txt
+git -C "$UNREVIEWED" commit -qm "feat: initial"
+
+mark "$(git -C "$REPO" rev-parse HEAD)"
+expect allow "a reviewed push survives a path in the message" \
+  "git commit -m \"cd $UNREVIEWED\" && git push origin main"
+# A cd that really is a command still decides, so what changed is which text
+# counts, not whether any does.
+unmark
+expect deny "a real cd still moves the target" "cd $REPO && git push origin main"
+expect allow "...including into the opted-out checkout" \
+  "cd $OPTOUT && git push origin main"
+# ...and it is the LAST one that counts, as it is for the shell.
+expect deny "the last cd wins" "cd $OPTOUT ; cd $REPO ; git push origin main"
+
 echo "--- git's own global options must not hide the subcommand ---"
 # `push` was recognised only straight after `git`, or after exactly
 # `git -C <dir>`, so any other global made the segment not a push at all --
