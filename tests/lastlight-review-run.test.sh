@@ -101,10 +101,17 @@ ok "...and so is a short one" "$(refused -x)" "lastlight-review-run: unknown opt
 # session and the containment probe. Undeclared, its absence was swallowed by
 # the probe's `|| true` and the run died blaming the model for being
 # unavailable. gtimeout counts, since that is what Homebrew coreutils installs.
-ok "timeout is declared as a dependency" \
-  "$(grep -c 'command -v timeout' "$RUN")" "1"
-ok "...and gtimeout is accepted" \
-  "$(grep -c 'command -v gtimeout' "$RUN")" "1"
+# The thing CHECKED FOR has to be the thing RUN. The first version accepted
+# `gtimeout` while every call site executed the literal `timeout` through
+# `env`, which resolves from PATH -- so a machine carrying only the g-prefixed
+# build passed the check and failed every call with 127, swallowed by the
+# probe's `|| true`. A declaration that made the misdiagnosis harder to find.
+ok "the runner asks the resolver, not a name nobody runs" \
+  "$(grep -c 'sandbox_timeout_cmd' "$RUN")" "2"
+ok "no call site execs a literal timeout" \
+  "$(grep -cE '(^|[^_])timeout [0-9$]' "$RUN")" "0"
+# ...and the resolver answers with whichever spelling is present.
+ok "it picks the plain name when both exist" "$(sandbox_timeout_cmd)" "timeout"
 
 ok "--model without a value is rejected" "$(refused --model)" "lastlight-review-run: --model needs a value"
 # A base ref with --working-tree is two different answers to "review what?",

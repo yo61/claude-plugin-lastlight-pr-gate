@@ -79,14 +79,18 @@ die() {
 main() {
   command -v claude > /dev/null 2>&1 || die "the claude CLI is required"
   command -v jq > /dev/null 2>&1 || die "jq is required"
-  # `timeout` is used to bound the reviewer session and the containment probe,
-  # and macOS does not ship one -- only Homebrew coreutils provides it, as
-  # `timeout` or `gtimeout`. Undeclared, its absence was swallowed by the
-  # probe's `|| true`, the report was never written, and the run died through
-  # the branch that blames the model for being unavailable. A missing tool
-  # should say it is missing.
-  command -v timeout > /dev/null 2>&1 || command -v gtimeout > /dev/null 2>&1 \
-    || die "timeout is not on PATH. macOS does not ship one; install coreutils (brew install coreutils)."
+  # A timeout command bounds the reviewer session and the containment probe,
+  # and macOS ships neither spelling of it. Undeclared, its absence was
+  # swallowed by the probe's `|| true` and the run died blaming the model for
+  # being unavailable.
+  #
+  # ASK THE RESOLVER, not `command -v` on a name nobody runs. The first version
+  # of this check accepted `gtimeout` while every call site executed `timeout`,
+  # so a machine carrying only the g-prefixed build passed the check and failed
+  # every call -- a declaration that made the misdiagnosis harder to find
+  # rather than easier.
+  [[ -n $(sandbox_timeout_cmd) ]] \
+    || die "no timeout command on PATH (looked for timeout and gtimeout). macOS ships neither; install GNU coreutils."
 
   # Model resolution, most specific first: --model flag, env, then the pinned
   # default. Recorded in the attestation so a review can always be traced to
@@ -228,7 +232,7 @@ main() {
   fi
 
   local rc=0
-  (cd "$review_root" && env "${env_args[@]+"${env_args[@]}"}" timeout "$TIMEOUT" claude -p "$(prompt "$review_root" "$base" "$sha" "$assets_root")" \
+  (cd "$review_root" && env "${env_args[@]+"${env_args[@]}"}" "$(sandbox_timeout_cmd)" "$TIMEOUT" claude -p "$(prompt "$review_root" "$base" "$sha" "$assets_root")" \
     --allowed-tools "${tools[@]}" \
     "${extra_args[@]}" \
     --model "$MODEL") > "$OUT_DIR/reviewer.log" 2>&1 || rc=$?

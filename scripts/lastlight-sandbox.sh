@@ -119,6 +119,25 @@ sandbox_allowed_domains() {
 # finding, and findings.json is the one file deliberately carried back out of
 # the workspace -- so the secret leaves through the channel the README calls
 # safe, with no network egress needed.
+# The name of the timeout command this machine actually has, or nothing.
+#
+# Both spellings exist in the wild -- macOS ships neither, and GNU coreutils is
+# packaged unprefixed on Linux and sometimes only g-prefixed elsewhere. The
+# dependency check used to accept either and every call site then ran the
+# literal `timeout`, through `env`, which resolves from PATH: so on a machine
+# with only the g-prefixed build the check passed and every call failed with
+# 127. The probe swallows that with `|| true`, so the run died blaming the
+# model for being unavailable.
+#
+# Resolved once and used everywhere, so the thing checked for is the thing run.
+sandbox_timeout_cmd() {
+  if command -v timeout > /dev/null 2>&1; then
+    printf 'timeout'
+  elif command -v gtimeout > /dev/null 2>&1; then
+    printf 'gtimeout'
+  fi
+}
+
 # What the REVIEW sandbox refuses to read: $HOME as a whole, then the stores
 # that resolve outside it.
 #
@@ -553,7 +572,7 @@ printf ' read=%s' '<the first line, or REFUSED>' >> '${inside}'"
   # a setup the review does not run in.
   local -a probe_env=(-i)
   while IFS= read -r kv; do probe_env+=("$kv"); done < <(sandbox_reviewer_env)
-  env "${probe_env[@]}" timeout 120 claude -p "$prompt" \
+  env "${probe_env[@]}" "$(sandbox_timeout_cmd)" 120 claude -p "$prompt" \
     --settings "$settings" --allowed-tools "${probe_tools[@]}" --model haiku \
     < /dev/null > /dev/null 2>&1 || true
 

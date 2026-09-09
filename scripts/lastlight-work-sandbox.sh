@@ -425,7 +425,7 @@ Then stop."
   # still reported containment -- the same fail-open as before, one level up.
   # Granting the tool leaves the deny rules as the only thing that can stop it,
   # which is precisely the claim being tested.
-  timeout 180 claude -p "$prompt" \
+  "$(sandbox_timeout_cmd)" 180 claude -p "$prompt" \
     --settings "$settings" --model haiku \
     --allowedTools "$(work_probe_tools)" < /dev/null > /dev/null 2>&1 || true
 
