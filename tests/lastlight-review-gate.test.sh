@@ -382,6 +382,32 @@ expect deny "a quoted substitution, with HEAD reviewed" 'git push origin "$(echo
 expect allow "...while a literal HEAD still goes" 'git push origin HEAD'
 unmark
 
+echo "--- ordinary push spellings of a REVIEWED sha ---"
+# Both of these denied a push whose SHA carried a valid marker, over a message
+# about an unresolvable ref. Class 1 under docs/gate-contract.md, and neither
+# was covered by any case here.
+#
+# They need HEAD reviewed. With nothing marked, the broken answer and the
+# correct one are both "deny".
+mark "$(git -C "$REPO" rev-parse HEAD)"
+# `+refspec` is the ordinary force-push spelling; the `+` was left on the ref
+# and rev-parse failed on it.
+expect allow "a force refspec" 'git push origin +main'
+expect allow "...with a destination" 'git push origin +main:main'
+# A flag whose value is a separate token used to leave that value standing in
+# for the remote, so the remote came back as a rev. `-o ci.skip` is how a CI
+# run gets skipped.
+expect allow "-o with a separate value" 'git push -o ci.skip origin main'
+expect allow "...spelled --push-option" 'git push --push-option ci.skip origin main'
+expect allow "...trailing rather than leading" 'git push origin main -o ci.skip'
+expect allow "--repo with a separate value" 'git push --repo origin main'
+unmark
+
+# ...and an unreviewed ref is still caught through the same spellings, or the
+# fix above would just be a hole.
+expect deny "a force refspec on an unreviewed ref" 'git push origin +other'
+expect deny "...behind a push option" 'git push -o ci.skip origin other'
+
 echo "--- a trailing comment is not part of the command ---"
 # The words after an unquoted `#` landed in the push argument list, so the gate
 # read a commented-out flag as the pushs own and allowed a real push.

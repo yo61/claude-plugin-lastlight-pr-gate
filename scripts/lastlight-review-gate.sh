@@ -140,6 +140,28 @@ pushed_revs() {
     [[ $tok =~ ^[0-9]*(\>|\<) ]] && continue
     [[ $tok == '&>'* ]] && continue
 
+    # A flag whose value is a SEPARATE token takes that token with it. Skipping
+    # the flag alone left the value standing in for the remote, so in
+    # `git push -o ci.skip origin main` the remote was read as `ci.skip` and
+    # `origin` came back as a rev -- rev-parse failed on it and the gate denied
+    # a push whose SHA had a valid marker. `-o ci.skip` is how a CI run gets
+    # skipped, which is about as ordinary as a push gets.
+    #
+    # The attached spellings need nothing: `--push-option=x` is one token and
+    # is already skipped as a flag below.
+    case $tok in
+      -o | --push-option | --repo | --receive-pack | --exec)
+        skip_next=1
+        continue
+        ;;
+      *) ;; # not a flag that carries its value separately
+    esac
+
+    # A force refspec keeps its `+`, and `rev-parse '+main^{commit}'` fails --
+    # so the ordinary force-push spelling was denied over an unresolvable ref
+    # while its SHA carried a marker. Strip it before anything reads the ref.
+    tok=${tok#+}
+
     case $tok in
       -*) continue ;;
       *:*)
