@@ -97,12 +97,31 @@ ok "--help does too" \
   "$(bash -c 'source "$1"; parse_options --help' _ "$RUN" 2>&1 | grep -c 'INDEPENDENT pass')" "1"
 ok "an unknown flag is rejected" "$(refused --bogus)" "lastlight-review-run: unknown option: --bogus"
 ok "...and so is a short one" "$(refused -x)" "lastlight-review-run: unknown option: -x"
+# macOS ships no `timeout`, and the runner uses it to bound both the reviewer
+# session and the containment probe. Undeclared, its absence was swallowed by
+# the probe's `|| true` and the run died blaming the model for being
+# unavailable. gtimeout counts, since that is what Homebrew coreutils installs.
+ok "timeout is declared as a dependency" \
+  "$(grep -c 'command -v timeout' "$RUN")" "1"
+ok "...and gtimeout is accepted" \
+  "$(grep -c 'command -v gtimeout' "$RUN")" "1"
+
 ok "--model without a value is rejected" "$(refused --model)" "lastlight-review-run: --model needs a value"
 # A base ref with --working-tree is two different answers to "review what?",
 # and the loser used to be the one the caller typed: `main` overwrote the base
 # with HEAD, reviewed only the uncommitted changes, and exited 0. A review that
 # covers less than the caller asked for and says nothing is the failure this
 # whole script exists to prevent.
+# ...in EITHER order. The loop stopped at the first non-flag word, so with the
+# ref written first the flag stayed unparsed in REST: the refusal below never
+# fired, and the run reviewed the committed diff and exited 0. The silent
+# reinterpretation that refusal exists to prevent, avoided only by writing the
+# flags first.
+ok "...and with the ref written first" \
+  "$(refused origin/main --working-tree | grep -c "given as one")" "1"
+ok "a flag after the ref is still parsed" \
+  "$(parsed origin/main --model opus)" "wt=0 model=opus rest=origin/main"
+
 ok "--working-tree with a base ref is refused" \
   "$(refused --working-tree origin/main)" \
   "lastlight-review-run: --working-tree reviews what is not yet committed, so there is nothing to compare against a base ref -- but 'origin/main' was given as one. Pass one or the other: the ref alone reviews the branch, --working-tree alone reviews the uncommitted changes."

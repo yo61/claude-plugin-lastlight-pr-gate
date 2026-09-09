@@ -70,6 +70,18 @@ verdict() {
   fi
 }
 
+# Compare two strings, for the cases that assert on a MESSAGE rather than a
+# verdict. Defined here rather than halfway down, so every section can use it.
+same() {
+  local label=$1 got=$2 want=$3
+  if [[ $got == "$want" ]]; then
+    pass=$((pass + 1))
+  else
+    fail=$((fail + 1))
+    printf '  FAIL %s\n    want: %s\n    got:  %s\n' "$label" "$want" "$got"
+  fi
+}
+
 expect() { # expect <allow|deny> <label> <command> [cwd]
   local want=$1 label=$2 cmd=$3 cwd=${4:-$REPO} got
   got=$(verdict "$cmd" "$cwd")
@@ -383,6 +395,28 @@ expect allow "...while a literal HEAD still goes" 'git push origin HEAD'
 unmark
 
 echo "--- ordinary push spellings of a REVIEWED sha ---"
+mark "$(git -C "$REPO" rev-parse HEAD)"
+# A `$` ANYWHERE in the segment used to deny, so a push whose refs were literal
+# was refused because an env assignment, a redirection target or a push-option
+# value carried one -- while the message told the caller to name the ref
+# literally, which they had. The test runs on tokens that reach ref position
+# now, where flags and redirections have already been skipped.
+expect allow "an env assignment carrying a dollar" 'FOO=$BAR git push origin main'
+expect allow "a redirection target carrying one" 'git push origin main 2> "$LOG"'
+expect allow "a push-option value carrying one" 'git push -o key=$v origin main'
+# `tag <name>` is git documented shorthand for refs/tags/<name>:refs/tags/<name>.
+# `tag` was emitted as a rev and rev-parse failed on it, so a tag push -- not
+# gated at all -- was refused over an unresolvable ref.
+expect allow "git push origin tag v1" 'git push origin tag v1'
+# ...and when a ref really is unreadable, the refusal says THAT rather than
+# reporting a ref nobody wrote. Mutation testing found the marker's identity
+# untested: any unresolvable placeholder denies, but only this one explains
+# why, and the wrong explanation implies the wrong fix.
+same "an unreadable ref is named as an expansion" \
+  "$(jq -n --arg c 'git push origin $BRANCH' --arg d "$REPO" \
+    '{tool_name:"Bash",cwd:$d,tool_input:{command:$c}}' | "$GATE" | grep -c 'shell expansion')" "1"
+unmark
+
 # Both of these denied a push whose SHA carried a valid marker, over a message
 # about an unresolvable ref. Class 1 under docs/gate-contract.md, and neither
 # was covered by any case here.
@@ -527,15 +561,6 @@ echo "--- nothing reaches a remote from a work workspace ---"
 # `expect` is this suite's helper; a plain comparison needs its own, and the
 # first version of these cases called `ok`, which does not exist here -- so
 # they ran silently and the count never moved.
-same() {
-  local label=$1 got=$2 want=$3
-  if [[ $got == "$want" ]]; then
-    pass=$((pass + 1))
-  else
-    fail=$((fail + 1))
-    printf '  FAIL %s\n    want: %s\n    got:  %s\n' "$label" "$want" "$got"
-  fi
-}
 workspace_on() { printf '%s\n' "/some/real/repo" > "$REPO/.git/lastlight-work-sandbox"; }
 workspace_off() { rm -f "$REPO/.git/lastlight-work-sandbox"; }
 

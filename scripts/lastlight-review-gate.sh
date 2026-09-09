@@ -157,6 +157,17 @@ pushed_revs() {
       *) ;; # not a flag that carries its value separately
     esac
 
+    # `tag <name>` is git's documented shorthand for
+    # refs/tags/<name>:refs/tags/<name>. Left alone, `tag` was emitted as a rev
+    # and rev-parse failed on it, so a tag push -- not gated at all, per the
+    # contract -- was refused over an unresolvable ref.
+    if [[ $tok == tag ]]; then
+      seen_remote=1
+      skip_next=1
+      printf -- '-\n'
+      continue
+    fi
+
     # A force refspec keeps its `+`, and `rev-parse '+main^{commit}'` fails --
     # so the ordinary force-push spelling was denied over an unresolvable ref
     # while its SHA carried a marker. Strip it before anything reads the ref.
@@ -164,6 +175,17 @@ pushed_revs() {
 
     case $tok in
       -*) continue ;;
+      *[\$\`]*)
+        # A ref this cannot read. The test used to run on the whole segment, so
+        # a `$` in an env assignment, a redirection target or a push-option
+        # value denied a push whose refs were literal -- while telling the
+        # caller to name the ref literally, which they had. Here it sees only
+        # tokens that reached ref position, because flags and redirections have
+        # already been skipped above.
+        seen_remote=1
+        printf '?\n'
+        continue
+        ;;
       *:*)
         # `src:dst`. An empty src is a deletion; a refs/tags/ dst carries no
         # commits of its own.
@@ -486,8 +508,10 @@ shell_words() {
           if (c == "\\" && i < n) { w = w substr(buf, ++i, 1); started = 1; continue }
           if (c == SQ)   { mode = "sq"; started = 1; continue }
           if (c == "\"") { mode = "dq"; started = 1; continue }
-          # A backtick is command substitution, not part of the word.
-          if (c == BT)   { started = 1; continue }
+          # A backtick is kept: the segmenter splits on it, so it no longer
+          # has to be removed here for a command to be recognised -- and a ref
+          # carrying one is how the gate knows it cannot read that ref.
+          if (c == BT)   { w = w c; started = 1; continue }
           # An unquoted `#` at the START of a word begins a comment, and the
           # rest of the line is not the command. Without this its words became
           # the push argument list, so `git push origin main # --dry-run`
@@ -811,23 +835,6 @@ gate_push_segment() {
     [[ -z $(pushed_revs "${args[@]+"${args[@]}"}") ]] && return 0
   fi
 
-  # A substitution in the push means the refs are not knowable from here.
-  # shell_words drops a backtick, leaving an empty word the caller discards --
-  # so the push looked like it named no ref, the gate substituted HEAD, and
-  # HEAD's marker vouched for whatever the substitution produced.
-  #
-  # BELOW the sentinel, the opt-out and the nothing-lands returns, and that
-  # order is the point. Above them it denied a deletion carrying an expansion,
-  # which lands nothing, and it gated a repository whose opt-out was set --
-  # while printing a message offering that same opt-out as the remedy. A
-  # refusal that names a way out that does not work is worse than one that
-  # names none. It only has to precede the marker check: a push whose refs
-  # cannot be read cannot be matched against a marker.
-  if grep -q '[$`]' <<< "$seg"; then
-    deny "$(gate_message "$(git -C "$target" rev-parse HEAD 2> /dev/null || echo HEAD)" \
-      'This push names its refs through a shell expansion, so the gate cannot tell which commits would land.')"
-  fi
-
   # `--all` / `--mirror` push a set this cannot enumerate from the command line.
   if push_has_flag --all "${args[@]+"${args[@]}"}" || push_has_flag --mirror "${args[@]+"${args[@]}"}"; then
     deny "$(gate_message "$(git -C "$target" rev-parse HEAD 2> /dev/null || echo HEAD)" \
@@ -849,6 +856,15 @@ gate_push_segment() {
   local rev sha
   while IFS= read -r rev; do
     [[ -n $rev ]] || continue
+    # A ref pushed_revs could not read: it reached ref position carrying an
+    # expansion, so what would land is not knowable from here. Below the
+    # sentinel, the opt-out and the nothing-lands returns, because a deletion
+    # or a dry run carrying one still lands nothing -- and above the marker
+    # check, because a ref that cannot be read cannot be matched to a marker.
+    if [[ $rev == '?' ]]; then
+      deny "$(gate_message "$(git -C "$target" rev-parse HEAD 2> /dev/null || echo HEAD)" \
+        'This push names a ref through a shell expansion, so the gate cannot tell which commits would land.')"
+    fi
     if ! sha=$(git -C "$target" rev-parse --verify "$rev^{commit}" 2> /dev/null); then
       # An unresolvable ref means the gate cannot prove the SHA was reviewed.
       # Fail CLOSED -- there is no network excuse here, only an unparsed command.

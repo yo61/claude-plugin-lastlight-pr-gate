@@ -79,6 +79,14 @@ die() {
 main() {
   command -v claude > /dev/null 2>&1 || die "the claude CLI is required"
   command -v jq > /dev/null 2>&1 || die "jq is required"
+  # `timeout` is used to bound the reviewer session and the containment probe,
+  # and macOS does not ship one -- only Homebrew coreutils provides it, as
+  # `timeout` or `gtimeout`. Undeclared, its absence was swallowed by the
+  # probe's `|| true`, the report was never written, and the run died through
+  # the branch that blames the model for being unavailable. A missing tool
+  # should say it is missing.
+  command -v timeout > /dev/null 2>&1 || command -v gtimeout > /dev/null 2>&1 \
+    || die "timeout is not on PATH. macOS does not ship one; install coreutils (brew install coreutils)."
 
   # Model resolution, most specific first: --model flag, env, then the pinned
   # default. Recorded in the attestation so a review can always be traced to
@@ -479,7 +487,19 @@ parse_options() {
   MODEL=${LASTLIGHT_REVIEW_MODEL:-$DEFAULT_MODEL}
   # Any leading `-`, not just `--`. Refs do not begin with one, so an
   # unrecognised flag belongs in `*)` rather than being read as a base ref.
-  while [[ ${1:-} == -* ]]; do
+  #
+  # The WHOLE argument list, not a leading run of flags. Stopping at the first
+  # non-flag left `origin/main --working-tree` with the flag unparsed in REST:
+  # WORKING_TREE stayed 0, the refusal below never fired, and the run reviewed
+  # the committed diff and exited 0 -- the silent reinterpretation that refusal
+  # exists to prevent, avoided only by writing the flags first.
+  local -a rest=()
+  while [[ $# -gt 0 ]]; do
+    if [[ $1 != -* ]]; then
+      rest+=("$1")
+      shift
+      continue
+    fi
     case $1 in
       --working-tree)
         WORKING_TREE=1
@@ -496,7 +516,7 @@ parse_options() {
       *) die "unknown option: $1" ;;
     esac
   done
-  REST=("$@")
+  REST=("${rest[@]+"${rest[@]}"}")
 
   # The two say different things about what to review, and `main` resolves that
   # by overwriting the base with HEAD -- so the run reviewed only uncommitted
