@@ -13,7 +13,8 @@ set -euo pipefail
 
 SELF_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 readonly SELF_DIR
-# shellcheck source=.shellcheck-version
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=../.shellcheck-version
 source "$SELF_DIR/../.shellcheck-version"
 
 if ! command -v shellcheck > /dev/null 2>&1; then
