@@ -102,6 +102,16 @@ repo_key() {
 # both -- no new failure mode, and the layout stays readable.
 slot_for() {
   local root=$1 branch=$2
+  # Validated BEFORE it becomes a path. This value is the last component of the
+  # workspace path and make_workspace clones into it, so a name carrying `..`
+  # wrote a full clone -- history and all -- outside WORK_ROOT, where none of
+  # the policy assembled later in cmd_start applies. The `checkout -b` that
+  # rejects a malformed ref name runs long after the clone has landed.
+  #
+  # Returns rather than dying: the callers read this through a command
+  # substitution, and `die` there would exit the subshell and leave them
+  # carrying on with an empty path.
+  git check-ref-format "refs/heads/$branch" 2> /dev/null || return 1
   printf '%s/%s/%s' "$WORK_ROOT" "$(repo_key "$root")" "$branch"
 }
 
@@ -572,7 +582,7 @@ cmd_start() {
   [[ -n $branch ]] || branch=$(git -C "$root" symbolic-ref --quiet --short HEAD) \
     || die "detached HEAD -- pass --branch"
 
-  slot=$(slot_for "$root" "$branch")
+  slot=$(slot_for "$root" "$branch") || die "not a usable branch name: $branch"
   ws=$slot/repo
   settings=$slot/sandbox.json
   if [[ -e $ws ]]; then
@@ -643,7 +653,7 @@ cmd_land() {
   [[ -n $branch ]] || branch=$(git -C "$root" symbolic-ref --quiet --short HEAD) \
     || die "detached HEAD -- pass --branch"
 
-  slot=$(slot_for "$root" "$branch")
+  slot=$(slot_for "$root" "$branch") || die "not a usable branch name: $branch"
   ws=$slot/repo
   [[ -d $ws ]] || die "no workspace for $branch -- start one with: lastlight-work-sandbox.sh start -b $branch"
   require_clean_tree "$ws" "the workspace"

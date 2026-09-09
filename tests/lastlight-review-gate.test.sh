@@ -620,6 +620,52 @@ expect allow "...including into the opted-out checkout" \
 # ...and it is the LAST one that counts, as it is for the shell.
 expect deny "the last cd wins" "cd $OPTOUT ; cd $REPO ; git push origin main"
 
+echo "--- a cd flag is not the destination ---"
+# The first word after `cd` was taken as the path, so `cd -P <dir>` resolved to
+# `-P`, found no repository there and fell back to the directory the command
+# started in. Both directions are wrong; this is the one that refuses a push
+# that had been reviewed.
+unmark
+expect allow "a flag before the path is skipped" \
+  "cd -P $OPTOUT && git push origin main"
+expect allow "...and so is an end-of-options marker" \
+  "cd -- $OPTOUT && git push origin main"
+# `cd -` is the previous directory, which this gate does not track. It has to
+# admit that and judge where the command started, not guess.
+expect deny "the previous directory is not guessed at" \
+  "cd $OPTOUT && cd - && git push origin main"
+expect deny "...nor is a bare cd" "cd && git push origin main"
+
+echo "--- a chain of relative moves ends where the shell ends ---"
+# Only the LAST cd argument was kept, and it was joined to the directory the
+# hook was started in rather than to where the chain had already arrived. So
+# `cd .. && cd sibling` named <cwd>/sibling, which does not exist, and the push
+# was judged against the directory it had left.
+CHAIN=$TMP/chain
+mkdir -p "$CHAIN"
+for r in main sib; do
+  git init -q -b main "$CHAIN/$r"
+  git -C "$CHAIN/$r" config user.email t@t
+  git -C "$CHAIN/$r" config user.name t
+  echo x > "$CHAIN/$r/f.txt"
+  git -C "$CHAIN/$r" add f.txt
+  git -C "$CHAIN/$r" commit -qm "feat: initial"
+done
+# The sibling is opted out, so arriving there is observable as an allow while
+# the starting repository has no marker at all.
+touch "$CHAIN/sib/.git/lastlight-review-gate-off"
+
+expect allow "a chain of relative moves is followed" \
+  "cd .. && cd sib && git push origin main" "$CHAIN/main"
+expect allow "...as is a single relative move" \
+  "cd ../sib && git push origin main" "$CHAIN/main"
+# ...and an absolute move later in the chain replaces what came before it,
+# rather than being appended to it.
+expect allow "an absolute move discards the chain" \
+  "cd /nowhere-at-all && cd $CHAIN/sib && git push origin main" "$CHAIN/main"
+expect deny "a chain that arrives nowhere is judged where it started" \
+  "cd .. && cd no-such-sibling && git push origin main" "$CHAIN/main"
+
 echo "--- git's own global options must not hide the subcommand ---"
 # `push` was recognised only straight after `git`, or after exactly
 # `git -C <dir>`, so any other global made the segment not a push at all --

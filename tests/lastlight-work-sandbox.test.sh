@@ -505,6 +505,27 @@ ok "the probe is granted Read" \
 ok "...and the full expected set" \
   "$(work_probe_tools)" "Bash,Write,Read"
 
+echo "--- a branch name is checked before it becomes a path ---"
+# slot_for puts this value straight into the workspace path and make_workspace
+# clones into it, so a name carrying `..` wrote a full clone outside WORK_ROOT
+# -- outside everything cmd_start builds its policy from. The checkout that
+# rejects a malformed ref name runs long after the clone has landed.
+slot_ok() { slot_for /some/repo "$1" > /dev/null 2>&1 && echo yes || echo no; }
+
+ok "an ordinary name is accepted" "$(slot_ok main)" "yes"
+ok "...and one with a slash in it" "$(slot_ok feat/thing)" "yes"
+ok "a traversing name is refused" "$(slot_ok ../../../tmp/x)" "no"
+ok "...as is a bare .. component" "$(slot_ok a/../b)" "no"
+# Nothing to build a path from, so a caller that ignored the status still could
+# not clone somewhere unintended.
+ok "and no path is printed for it" "$(slot_for /some/repo ../../../tmp/x 2> /dev/null)" ""
+
+# ...and the callers act on the status. slot_for returns rather than dying,
+# because both read it through a command substitution where die would exit
+# only the subshell -- so the check is worth nothing unless they test it.
+ok "both callers refuse on a bad name" \
+  "$(grep -c ') || die "not a usable branch name' "$WORK" || true)" "2"
+
 echo "--- the workspace signal lives outside the workspace ---"
 # It used to be a file inside the clone git dir, which a session can write with
 # Bash or Edit -- so it could delete the signal, forge a marker in its own

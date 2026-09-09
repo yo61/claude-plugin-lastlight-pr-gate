@@ -121,22 +121,58 @@ deny() {
 #
 # The LAST one wins, because that is where the shell ends up.
 cd_target() {
-  local seg w first p=""
+  local cmd=$1 p=$2 seg arg rc
   while IFS= read -r seg; do
-    first=1
-    while IFS= read -r w; do
-      if [[ $first -eq 1 ]]; then
-        # Command position only. A `cd` sitting in someone else's argument list
-        # moves nothing.
-        [[ $w == cd || $w == pushd ]] || break
-        first=0
+    arg=$(cd_argument "$seg")
+    rc=$?
+    # Not a cd at all: this segment moves nothing.
+    [[ $rc -eq 2 ]] && continue
+    # A cd whose destination cannot be computed -- `cd -`, or a bare `cd` --
+    # makes every later relative move unknown too. Say so by returning nothing
+    # rather than carrying on from a directory the shell has already left.
+    if [[ $rc -eq 1 ]]; then
+      printf ''
+      return 0
+    fi
+    arg=${arg/#\~/$HOME}
+    if [[ $arg == /* ]]; then p=$arg; else p=$p/$arg; fi
+  done < <(shell_segments "$cmd")
+  printf '%s' "$p"
+}
+
+# The directory one `cd` or `pushd` segment moves to.
+#
+# 0 with the argument printed; 1 for a cd this cannot model; 2 when the segment
+# is not a cd. The three are worth separating: 2 leaves the running directory
+# alone, while 1 has to discard it, and treating them alike is what made
+# `cd -P <dir>` resolve to nowhere and fall back to the wrong repository.
+cd_argument() {
+  local w first=1 opts=1
+  while IFS= read -r w; do
+    if [[ $first -eq 1 ]]; then
+      # Command position only. A `cd` sitting in someone else's argument list
+      # moves nothing.
+      [[ $w == cd || $w == pushd ]] || return 2
+      first=0
+      continue
+    fi
+    if [[ $opts -eq 1 ]]; then
+      # `-` is the previous directory, which this does not track.
+      [[ $w == - ]] && return 1
+      if [[ $w == -- ]]; then
+        opts=0
         continue
       fi
-      [[ -n $w ]] && p=$w
-      break
-    done < <(shell_words "$seg")
-  done < <(shell_segments "$1")
-  printf '%s' "$p"
+      # -P, -L, -e, -@ carry no path.
+      [[ $w == -?* ]] && continue
+    fi
+    printf '%s' "$w"
+    return 0
+  done < <(shell_words "$1")
+  # Nothing after it: `cd` alone goes home, which is a move this does not
+  # model. `pushd` alone swaps the top two entries of a stack it does not keep.
+  [[ $first -eq 1 ]] && return 2
+  return 1
 }
 
 resolve_target() {
@@ -146,17 +182,22 @@ resolve_target() {
   # accumulated prefix, so an unrelated `git -C ../elsewhere status` earlier on
   # the line decided where a later push was judged -- and with one opted-out
   # repository anywhere on disk that was a one-line bypass.
-  p=$explicit
-  [[ -n $p ]] || p=$(cd_target "$cmd")
   # No quote stripping: both sources are parsed words, and the tokeniser has
   # already taken the quotes off and kept `cd "/a b/c"` as one word. Peeling
   # one leading and one trailing quote by hand is what a text match needed.
+  p=$explicit
   p=${p/#\~/$HOME}
   # A relative path is relative to where the COMMAND runs, not to wherever this
   # hook happens to have been started. `git -C . -c x=y push` resolved `.` in
   # the hook's own process directory and judged the push against a completely
   # different repository -- one that happened to have a marker.
   [[ -z $p || $p == /* ]] || p=$fallback/$p
+  # ...and with no `git -C`, wherever the cd chain arrived. It walks from the
+  # command's own directory, so a relative move lands against what the previous
+  # move produced: `cd .. && cd sibling` used to keep only `sibling` and join
+  # it to the hook's cwd, naming a directory that does not exist and refusing
+  # a reviewed push there.
+  [[ -n $p ]] || p=$(cd_target "$cmd" "$fallback")
   # ...and it has to BE a repository. A `cd` inside a closed subshell does not
   # move where a later command runs, so `(cd /tmp); git push origin main`
   # resolved /tmp, found no git dir there, and the caller returned 0 -- allowing
