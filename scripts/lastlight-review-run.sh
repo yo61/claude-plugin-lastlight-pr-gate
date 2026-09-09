@@ -270,7 +270,8 @@ main() {
   if [[ -n $workspace ]] && [[ -e "$workspace/$OUT_DIR/findings.json" || -L "$workspace/$OUT_DIR/findings.json" ]]; then
     findings_contained "$workspace" \
       || die "the reviewer left something other than a plain file where its findings should be, in $workspace/$OUT_DIR. Refusing to copy it out: this step runs outside the sandbox and would read whatever that path points at."
-    cp "$workspace/$OUT_DIR/findings.json" "$OUT_DIR/findings.json"
+    copy_findings_out "$workspace/$OUT_DIR/findings.json" "$OUT_DIR/findings.json" \
+      || die "the findings file became a symlink while it was being copied out of the sandbox, so something was still running in there. Nothing was read through it. Re-run the review."
   fi
   [[ -f "$OUT_DIR/findings.json" ]] \
     || die "the reviewer wrote no findings.json; see $OUT_DIR/reviewer.log"
@@ -474,6 +475,29 @@ reviewer_git_env() {
 #
 # Extracted so it can be tested: the check it replaces sat inline in a function
 # that runs a model session, which is not something a suite can call.
+# Bring the one artefact the contract produces out of the sandbox.
+#
+# -P: never follow a link. The containment check and this copy are separate
+# operations with a gap between them, and the reviewer had Bash -- nothing here
+# waits for whatever it may have left running. A process that swaps the file
+# for a symlink in that window handed `cp` a host file to read, and its
+# contents landed in the real repository as tracked output: exactly what the
+# check before this was written to prevent.
+#
+# The race is still there; bash cannot copy through a descriptor. What changes
+# is where it ends. Copying the LINK means the worst case is a symlink arriving
+# here, which is refused and removed -- so the bytes on the far side of it are
+# never read by anything outside the sandbox.
+copy_findings_out() {
+  local src=$1 dest=$2
+  cp -P "$src" "$dest" || return 1
+  if [[ -L $dest ]]; then
+    rm -f "$dest"
+    return 1
+  fi
+  return 0
+}
+
 findings_skipped() {
   if [[ $(jq -r '.skip // false' "$1" 2> /dev/null) == true ]]; then
     printf 'yes'

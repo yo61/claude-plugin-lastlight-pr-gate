@@ -181,20 +181,76 @@ ok "escape reported as succeeding, no canary" "$(verdict 0 'ran rc=0')" "inconcl
 ok "canary escaped, probe claims refusal" "$(verdict 1 'ran rc=1')" "escaped"
 ok "canary escaped, probe silent" "$(verdict 1 '')" "escaped"
 
+echo "--- a link out of the workspace is refused, not carried in ---"
+# The COMMITTED path first, which is the one an incoming branch controls.
+# `git checkout` materialises a symlink exactly as the branch spells it, so a
+# branch could ship a link to anywhere on the host and the reviewer would read
+# through it. Only the working-tree builder was covered at first, and removing
+# the check from this one broke no assertion.
+CLINK=$TMP/committed-link
+mkdir -p "$CLINK/outside"
+printf 'not for the reviewer\n' > "$CLINK/outside/target.txt"
+git init -q -b main "$CLINK/repo"
+git -C "$CLINK/repo" config user.email t@t
+git -C "$CLINK/repo" config user.name t
+printf 'x\n' > "$CLINK/repo/f.txt"
+git -C "$CLINK/repo" add f.txt
+git -C "$CLINK/repo" commit -qm "feat: initial"
+CLINK_OK=$(git -C "$CLINK/repo" rev-parse HEAD)
+ln -sfn "$CLINK/outside/target.txt" "$CLINK/repo/reaches-out"
+git -C "$CLINK/repo" add reaches-out
+git -C "$CLINK/repo" commit -qm "feat: link out"
+CLINK_BAD=$(git -C "$CLINK/repo" rev-parse HEAD)
+
+ok "a committed link out is refused" \
+  "$( (sandbox_make_workspace "$CLINK/repo" "$CLINK_BAD" > /dev/null 2>&1) && echo made || echo refused)" \
+  "refused"
+# ...and the commit before it, in the same repository, still builds.
+ok "...while the commit before it builds" \
+  "$( (sandbox_make_workspace "$CLINK/repo" "$CLINK_OK" > /dev/null 2>&1) && echo made || echo refused)" \
+  "made"
+
+# `git checkout` materialises a committed symlink exactly as the branch spells
+# it, and `cp -RP` preserves an untracked one. The reviewer is always granted
+# Read, and everything it reads leaves through findings.json -- which is copied
+# out by design, with no network involved. So a link committed by the branch
+# was a read primitive for any path on the host, and the deny list stops at
+# $HOME.
+OUTLINK=$TMP/outward
+mkdir -p "$OUTLINK"
+printf 'not for the reviewer\n' > "$OUTLINK/target.txt"
+ln -sfn "$OUTLINK/target.txt" "$REPO/reaches-out"
+ok "a workspace linking out is refused" \
+  "$( (sandbox_make_working_workspace "$REPO" > /dev/null 2>&1) && echo made || echo refused)" \
+  "refused"
+rm -f "$REPO/reaches-out"
+# ...and with it gone the same repository builds, so the refusal is about the
+# link rather than anything else in the tree.
+ok "...and builds once it is gone" \
+  "$( (sandbox_make_working_workspace "$REPO" > /dev/null 2>&1) && echo made || echo refused)" \
+  "made"
+
 echo "--- untracked files are copied faithfully, not approximately ---"
 mkdir -p "$REPO/nested/deep"
 echo nested > "$REPO/nested/deep/file.txt"
 echo spaced > "$REPO/a file with spaces.txt"
-ln -sfn /etc/hosts "$REPO/dangling-link"
+# A directory whose name starts with a hyphen: dirname read it as options,
+# printed nothing, and the copy then failed with a message naming the file
+# rather than the reason.
+mkdir -p "$REPO/-webpack-cache"
+echo hyphen > "$REPO/-webpack-cache/thing.txt"
+ln -sfn nested/deep/file.txt "$REPO/inside-link"
 WWS2=$(sandbox_make_working_workspace "$REPO")
 ok "untracked file in a new subdirectory" \
   "$([[ -f "$WWS2/nested/deep/file.txt" ]] && echo yes || echo no)" "yes"
 ok "untracked filename containing spaces" \
   "$([[ -f "$WWS2/a file with spaces.txt" ]] && echo yes || echo no)" "yes"
+ok "untracked file under a hyphen-led directory" \
+  "$([[ -f "$WWS2/-webpack-cache/thing.txt" ]] && echo yes || echo no)" "yes"
 # A symlink copied as its target drags a file from outside the repo INTO the
 # workspace, which is the opposite of isolating the review.
 ok "untracked symlink stays a symlink" \
-  "$([[ -L "$WWS2/dangling-link" ]] && echo yes || echo no)" "yes"
+  "$([[ -L "$WWS2/inside-link" ]] && echo yes || echo no)" "yes"
 
 echo "--- sandbox_escape_canary: a probe target that measures something ---"
 CANARY=$(sandbox_escape_canary)

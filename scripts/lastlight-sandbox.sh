@@ -335,6 +335,39 @@ sandbox_settings_json() {
 }
 
 # A disposable copy of HEAD. Prints the workspace path.
+# Refuse a checkout that links out of itself.
+#
+# `git checkout` materialises a committed symlink exactly as the branch spells
+# it, absolute targets included. The reviewer is always granted Read, and
+# everything it reads can leave through findings.json -- which is copied out of
+# the sandbox by design, with no human in between and no network involved. So a
+# link committed by the branch under review is a read primitive for any path on
+# the host.
+#
+# The deny list stops at $HOME, on the reasoning in this file's header that
+# egress control closes exfiltration. findings.json is a second channel that
+# egress control does not touch, and it is always open. This closes the other
+# end instead: what cannot be reached cannot be carried out.
+#
+# Refused, not deleted. A link pointing out is either an accident worth seeing
+# or an attempt worth seeing, and quietly removing files would make the review
+# disagree with the diff it reports on.
+sandbox_refuse_outward_links() {
+  local ws=$1 link target parent resolved
+  ws=$(cd "$ws" 2> /dev/null && pwd -P) || return 0
+  while IFS= read -r -d "" link; do
+    target=$(readlink -- "$link" 2> /dev/null) || continue
+    [[ $target == /* ]] || target=$(dirname -- "$link")/$target
+    # A link into a directory that does not exist reaches nothing.
+    parent=$(cd "$(dirname -- "$target")" 2> /dev/null && pwd -P) || continue
+    resolved=$parent/$(basename -- "$target")
+    case $resolved in
+      "$ws" | "$ws"/*) continue ;;
+    esac
+    die "the branch commits a symlink pointing outside the workspace: ${link#"$ws"/} -> $target. Refusing to review it -- the reviewer may read whatever that reaches, and anything it reads leaves through findings.json."
+  done < <(find "$ws" -path "$ws/.git" -prune -o -type l -print0 2> /dev/null)
+}
+
 sandbox_make_workspace() {
   local root=$1 sha=$2 ws
   ws=$(mktemp -d)/review
@@ -344,6 +377,7 @@ sandbox_make_workspace() {
     || die "could not clone the repository into an isolated workspace"
   git -C "$ws" checkout --quiet --detach "$sha" 2> /dev/null \
     || die "could not check out ${sha:0:12} in the isolated workspace"
+  sandbox_refuse_outward_links "$ws"
   printf '%s' "$ws"
 }
 
@@ -398,11 +432,16 @@ sandbox_make_working_workspace() {
   # tree with such a name must not silently skip it.
   local f
   while IFS= read -r -d '' f; do
-    mkdir -p "$ws/$(dirname "$f")" \
+    # `--`, like the cp below it. A path under a directory whose name starts
+    # with a hyphen -- `-webpack-cache/foo` -- was read by dirname as options:
+    # it printed nothing, mkdir -p made only the workspace root, and the copy
+    # then failed with a message naming the file rather than the reason.
+    mkdir -p "$ws/$(dirname -- "$f")" \
       || die "could not create a directory for untracked '$f' in the isolated workspace"
     cp -RP -- "$root/$f" "$ws/$f" \
       || die "could not copy untracked '$f' into the isolated workspace"
   done < <(git -C "$root" ls-files --others --exclude-standard -z -- "$LASTLIGHT_EXCLUDE")
+  sandbox_refuse_outward_links "$ws"
   printf '%s' "$ws"
 }
 

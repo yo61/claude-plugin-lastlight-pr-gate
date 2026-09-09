@@ -112,6 +112,21 @@ slot_for() {
   # substitution, and `die` there would exit the subshell and leave them
   # carrying on with an empty path.
   git check-ref-format "refs/heads/$branch" 2> /dev/null || return 1
+  # ...and a charset on top of it, because check-ref-format is answering a
+  # different question. It accepts `$`, backticks, `;` and quotes -- all
+  # verified -- and this value becomes part of the workspace PATH, which
+  # work_verify splices into shell snippets the probe session is told to run
+  # exactly as given. That turns a branch name into a way to run commands
+  # inside the one check that decides whether the sandbox policy is trusted,
+  # and to print the report text that means contained.
+  #
+  # Narrower than git allows, deliberately. Everything an ordinary branch name
+  # is made of is here; anything else is refused rather than escaped, since
+  # escaping has to be right at every place the value is spliced and this has
+  # to be right once.
+  [[ $branch =~ ^[A-Za-z0-9._/-]+$ ]] || return 1
+  # A leading hyphen reads as an option wherever the name is passed on.
+  [[ $branch != -* ]] || return 1
   printf '%s/%s/%s' "$WORK_ROOT" "$(repo_key "$root")" "$branch"
 }
 
@@ -514,9 +529,22 @@ Then stop."
   # tool. macOS ships neither spelling.
   [[ -n $(sandbox_timeout_cmd) ]] \
     || die "no timeout command on PATH (looked for timeout and gtimeout). macOS ships neither; install GNU coreutils."
-  "$(sandbox_timeout_cmd)" 180 claude -p "$prompt" \
-    --settings "$settings" --model haiku \
-    --allowedTools "$(work_probe_tools)" < /dev/null > /dev/null 2>&1 || true
+  # From a directory of its own, for the reason sandbox_verify gives: cwd here
+  # is the real repository with the branch under test already checked out, and
+  # CLAUDE.md is auto-discovered from cwd. A branch that commits one can tell
+  # this probe to skip the escape attempts and print the report that means
+  # contained -- silencing the check that decides whether the policy is
+  # trusted. The sibling was fixed and this one was left, which is the whole
+  # reason to say the same thing in both places.
+  local probe_cwd
+  probe_cwd=$(mktemp -d 2> /dev/null) || probe_cwd=""
+  (
+    [[ -n $probe_cwd ]] && cd "$probe_cwd"
+    "$(sandbox_timeout_cmd)" 180 claude -p "$prompt" \
+      --settings "$settings" --model haiku \
+      --allowedTools "$(work_probe_tools)" < /dev/null > /dev/null 2>&1
+  ) || true
+  [[ -n $probe_cwd ]] && rmdir "$probe_cwd" 2> /dev/null
 
   report=$(cat "$inside" 2> /dev/null || true)
   rm -f "$inside"

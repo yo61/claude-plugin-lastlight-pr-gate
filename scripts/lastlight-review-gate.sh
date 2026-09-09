@@ -272,13 +272,10 @@ pushed_revs() {
     #
     # The attached spellings need nothing: `--push-option=x` is one token and
     # is already skipped as a flag below.
-    case $tok in
-      -o | --push-option | --repo | --receive-pack | --exec)
-        skip_next=1
-        continue
-        ;;
-      *) ;; # not a flag that carries its value separately
-    esac
+    if push_flag_takes_value "$tok"; then
+      skip_next=1
+      continue
+    fi
 
     # `tag <name>` is git's documented shorthand for
     # refs/tags/<name>:refs/tags/<name>. Left alone, `tag` was emitted as a rev
@@ -985,11 +982,34 @@ push_words() {
 # going to refuse anyway; not matching it gates instead. Untestable and
 # strictly less safe, so it is gone rather than carried as defence in depth
 # that cannot be checked.
+# The push options whose value is a SEPARATE token.
+#
+# ONE list, because two readers of the same argument list that disagree about
+# which words are values will disagree about what the command does. This lived
+# inside pushed_revs, so push_has_flag counted `-o --dry-run` as a --dry-run
+# FLAG rather than as the value of -o. A dry run is allowed without any of the
+# checks below it -- the marker, the opt-out, the work-sandbox refusal -- so
+# the push was waved through while git sent the objects.
+push_flag_takes_value() {
+  case $1 in
+    -o | --push-option | --repo | --receive-pack | --exec) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 push_has_flag() {
   local want=$1
   shift
-  local a
+  local a skip=0
   for a in "$@"; do
+    if [[ $skip -eq 1 ]]; then
+      skip=0
+      continue
+    fi
+    if push_flag_takes_value "$a"; then
+      skip=1
+      continue
+    fi
     [[ $a == "$want" ]] && return 0
   done
   return 1

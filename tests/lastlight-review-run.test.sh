@@ -304,6 +304,32 @@ ok "the current CLI wording is detected too" "$(trr "$TRR/current.log")" "yes"
 printf 'checking permission rules for the session\n' > "$TRR/chatty.log"
 ok "an ordinary mention of rules is not" "$(trr "$TRR/chatty.log")" "no"
 
+echo "--- the copy out of the sandbox does not follow a link ---"
+# The containment check and the copy are separate operations, and the reviewer
+# had Bash -- nothing waits for what it may have left running. A process that
+# swapped the file for a symlink in that window handed cp a host file to read,
+# and its contents landed in the real repository as tracked output.
+CPO=$(mktemp -d)
+printf 'not for the repository\n' > "$CPO/host-secret"
+printf '{"event":"APPROVE"}' > "$CPO/real.json"
+
+ok "an ordinary file is copied" \
+  "$(copy_findings_out "$CPO/real.json" "$CPO/out-ok.json" && cat "$CPO/out-ok.json")" \
+  '{"event":"APPROVE"}'
+
+ln -sfn "$CPO/host-secret" "$CPO/swapped.json"
+ok "a link is refused" \
+  "$(copy_findings_out "$CPO/swapped.json" "$CPO/out-bad.json" && echo copied || echo refused)" \
+  "refused"
+# The point of the refusal: what the link pointed at never arrives. Asserting
+# only on the status would pass just as well if cp had dereferenced it and the
+# check then failed for some other reason.
+ok "...and what it pointed at does not arrive" \
+  "$(cat "$CPO/out-bad.json" 2> /dev/null || echo absent)" "absent"
+ok "...leaving nothing behind at the destination" \
+  "$([[ -e $CPO/out-bad.json || -L $CPO/out-bad.json ]] && echo present || echo absent)" "absent"
+rm -rf "$CPO"
+
 echo "--- the runner refuses a skipped review ---"
 # The reviewer writes this file inside the sandbox, having read a diff this
 # script calls untrusted. `skip` is the schema's own escape hatch for GitHub

@@ -636,6 +636,28 @@ expect deny "the previous directory is not guessed at" \
   "cd $OPTOUT && cd - && git push origin main"
 expect deny "...nor is a bare cd" "cd && git push origin main"
 
+echo "--- an option value is not a flag ---"
+# push_has_flag walked the arguments without knowing which options carry a
+# separate value, so `-o --dry-run` was read as a --dry-run FLAG rather than as
+# the value of -o. A dry run returns before every check below it -- the marker,
+# the opt-out, the work-sandbox refusal -- so the push was waved through while
+# git sent the objects. pushed_revs already had the list; the two disagreed.
+unmark
+expect deny "--dry-run smuggled as an -o value" \
+  "git push -o --dry-run origin main"
+expect deny "...and as a --push-option value" \
+  "git push --push-option --dry-run origin main"
+expect deny "--delete smuggled the same way" \
+  "git push -o --delete origin main"
+expect deny "...and -d" "git push -o -d origin main"
+expect deny "--exec carries its value too" \
+  "git push --exec --dry-run origin main"
+# ...while the flags themselves still mean what they say, so what changed is
+# which words count as flags rather than whether any do.
+expect allow "a real --dry-run still passes" "git push --dry-run origin main"
+expect allow "a real push option before one" \
+  "git push -o ci.skip=true --dry-run origin main"
+
 echo "--- a closed subshell does not move where the push is judged ---"
 # shell_segments split on parens and dropped them, so `(cd elsewhere)` was
 # indistinguishable from a cd that persists -- and the push was judged in a

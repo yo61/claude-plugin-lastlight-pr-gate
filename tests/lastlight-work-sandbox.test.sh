@@ -515,6 +515,19 @@ slot_ok() { slot_for /some/repo "$1" > /dev/null 2>&1 && echo yes || echo no; }
 ok "an ordinary name is accepted" "$(slot_ok main)" "yes"
 ok "...and one with a slash in it" "$(slot_ok feat/thing)" "yes"
 ok "a traversing name is refused" "$(slot_ok ../../../tmp/x)" "no"
+# git accepts all of these as ref names -- verified -- and the value becomes
+# part of the workspace path, which work_verify splices into shell snippets the
+# probe is told to run exactly as given.
+DOLLAR=$(printf "\044")
+BTICK=$(printf "\140")
+ok "a command substitution is refused" "$(slot_ok "a${DOLLAR}(x)b")" "no"
+ok "a backtick is refused" "$(slot_ok "a${BTICK}x${BTICK}b")" "no"
+ok "a semicolon is refused" "$(slot_ok "a;b")" "no"
+SQUOTE=$(printf "\047")
+ok "a quote is refused" "$(slot_ok "a${SQUOTE}b")" "no"
+ok "a leading hyphen is refused" "$(slot_ok -x)" "no"
+# ...while the shapes real branches use are not.
+ok "dots and hyphens are fine" "$(slot_ok feat/thing-2.1_x)" "yes"
 ok "...as is a bare .. component" "$(slot_ok a/../b)" "no"
 # Nothing to build a path from, so a caller that ignored the status still could
 # not clone somewhere unintended.
