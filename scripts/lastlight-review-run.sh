@@ -226,10 +226,6 @@ main() {
   printf 'Reviewing %s against %s\n  model: %s (independent session)\n' \
     "${sha:0:12}" "${base:0:12}" "$MODEL" >&2
 
-  # Say WHICH failure it was, and stop pointing at a file that cannot help.
-  # `timeout` kills the session with SIGTERM, so nothing is flushed and the log
-  # is empty by construction -- "failed or timed out; see the log" then sent the
-  # reader to an empty file, which is where this message used to end.
   # Only when sandboxed. Unsandboxed the reviewer runs with the user's own
   # privileges anyway, so an explicit environment would be theatre -- and the
   # git settings would take the user's own gitignore away for no gain.
@@ -249,20 +245,24 @@ main() {
     --allowed-tools "${tools[@]}" \
     "${extra_args[@]}" \
     --model "$MODEL") > "$OUT_DIR/reviewer.log" 2>&1 || rc=$?
+  # A rule the CLI could not parse leaves the reviewer without a tool it needed,
+  # and it carries on and produces a thinner review rather than failing. Treat
+  # that as a hard error: a silently under-equipped reviewer is worse than none.
+  #
+  # Checked BEFORE the exit status, not after. It used to come after, so a run
+  # that was also killed at the timeout died pointing at the timeout while the
+  # rejected rule went unmentioned -- and the rejection is the better
+  # explanation whatever the status turned out to be.
+  if tool_rule_rejected "$OUT_DIR/reviewer.log"; then
+    die "the CLI rejected an allowed-tools rule, so the reviewer ran under-equipped; see $OUT_DIR/reviewer.log"
+  fi
   if [[ $rc -eq 124 ]]; then
-    die "the reviewer session was killed at the ${TIMEOUT}s timeout, so ${OUT_DIR}/reviewer.log is empty. Re-run it, or raise LASTLIGHT_REVIEW_TIMEOUT."
+    die "$(timeout_message "$OUT_DIR/reviewer.log" "$TIMEOUT")"
   fi
   if [[ $rc -ne 0 ]]; then
     [[ -s "$OUT_DIR/reviewer.log" ]] \
       || die "the reviewer session failed (exit ${rc}) without writing anything to ${OUT_DIR}/reviewer.log."
     die "the reviewer session failed (exit ${rc}); see $OUT_DIR/reviewer.log"
-  fi
-
-  # A rule the CLI could not parse leaves the reviewer without a tool it needed,
-  # and it will carry on and produce a thinner review rather than fail. Treat
-  # that as a hard error: a silently under-equipped reviewer is worse than none.
-  if tool_rule_rejected "$OUT_DIR/reviewer.log"; then
-    die "the CLI rejected an allowed-tools rule, so the reviewer ran under-equipped; see $OUT_DIR/reviewer.log"
   fi
 
   # The reviewer wrote inside the isolated workspace; bring the one artifact
@@ -451,8 +451,35 @@ reviewer_git_env() {
     GIT_CONFIG_KEY_1=core.attributesFile GIT_CONFIG_VALUE_1=/dev/null
 }
 
+# Whether the CLI refused one of the rules it was handed.
+#
+# Two wordings, because this matches a message rather than a status and the
+# message has already changed once. The pattern only knew the older
+# "Ignoring --allowedTools rule", so when the CLI moved to "Permission allow
+# rule (--allowed-tools): ... is not matched" the guard went quiet and a
+# rejected rule rode through unreported. Matching both is the cost of having no
+# machine-readable signal to check instead.
 tool_rule_rejected() {
-  grep -q 'Ignoring --allowedTools rule' "$1" 2> /dev/null
+  grep -qE 'Ignoring --allowedTools rule|Permission (allow|deny) rule \(--[a-z-]+\):.*not matched' \
+    "$1" 2> /dev/null
+}
+
+# What to say when the session was killed at the timeout.
+#
+# It used to state flatly that the log was empty, reasoning that SIGTERM
+# flushes nothing. That is wrong: the CLI writes startup diagnostics long
+# before the kill. A run that timed out with a rejected tool rule in the log
+# was told to raise LASTLIGHT_REVIEW_TIMEOUT -- the wrong next step -- while
+# the reason sat in the file the message had just called empty.
+timeout_message() {
+  local log=$1 secs=$2
+  if [[ -s $log ]]; then
+    printf 'the reviewer session was killed at the %ss timeout. %s holds what it wrote before the kill and may say why; read that before raising LASTLIGHT_REVIEW_TIMEOUT.' \
+      "$secs" "$log"
+  else
+    printf 'the reviewer session was killed at the %ss timeout, and %s is empty. Re-run it, or raise LASTLIGHT_REVIEW_TIMEOUT.' \
+      "$secs" "$log"
+  fi
 }
 
 working_tree_diff() {
@@ -509,10 +536,15 @@ review_tools() {
   # for an absolute one, which this rule does not match -- survivable while
   # sandboxed, because Bash is granted there and the reviewer could write the
   # file another way, and fatal in the unsandboxed fallback, where the tool list
-  # is the whole boundary and Write is the only way through. The run would spend
-  # the review and then fail for want of a findings file, on exactly the
-  # platforms that have no sandbox to fall back from.
-  REVIEW_TOOLS+=("Edit(${OUT_DIR}/findings.json)" "Write(${OUT_DIR}/findings.json)")
+  # is the whole boundary and this rule is the only way through.
+  #
+  # Edit, and ONLY Edit. A path rule is matched against file permission checks,
+  # and those recognise Edit(path) alone -- an Edit rule covers every
+  # file-editing tool, Write included. A Write(path) rule beside it is not a
+  # belt-and-braces second grant: the CLI rejects it outright, which is the
+  # under-equipped-reviewer case this script treats as fatal, tripped by the
+  # script itself.
+  REVIEW_TOOLS+=("Edit(${OUT_DIR}/findings.json)")
 }
 
 usage() {

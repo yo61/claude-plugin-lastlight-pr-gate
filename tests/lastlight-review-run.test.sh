@@ -185,24 +185,32 @@ tools_for() {
 }
 
 # The run deletes a stale findings.json before starting, so the file is
-# guaranteed ABSENT. `Edit` cannot create a file -- only `Write` can -- so with
-# Edit alone the reviewer stalls asking for permission and the run dies having
-# spent the model call. It only ever succeeded when the reviewer improvised
-# with `Bash`, which is not granted unsandboxed at all.
-ok "unsandboxed grants Write on the findings file" \
-  "$(tools_for '' | grep -cx 'Write(.lastlight/pr-review/findings.json)')" "1"
+# guaranteed ABSENT -- the rule has to authorise CREATING it, not just editing
+# one that is already there.
+#
+# An Edit(path) rule does exactly that. This once carried a Write(path) rule
+# beside it, on the reasoning that "Edit cannot create a file, only Write can";
+# that confuses what the Edit TOOL does with what an Edit RULE matches. Probed
+# directly against the CLI -- one `claude -p` asked to create a file, granted
+# `Edit(out.txt)` and nothing else -- the file was created and the run exited
+# 0. The rule form is what the CLI matches, and it covers every file-editing
+# tool, Write included.
+ok "unsandboxed grants Edit on the findings file" \
+  "$(tools_for '' | grep -cx 'Edit(.lastlight/pr-review/findings.json)')" "1"
 ok "sandboxed grants it too" \
-  "$(tools_for /tmp/ws | grep -cx 'Write(.lastlight/pr-review/findings.json)')" "1"
+  "$(tools_for /tmp/ws | grep -cx 'Edit(.lastlight/pr-review/findings.json)')" "1"
 ok "an override still gets it appended" \
-  "$(tools_for '' 'Read,Grep' | grep -cx 'Write(.lastlight/pr-review/findings.json)')" "1"
+  "$(tools_for '' 'Read,Grep' | grep -cx 'Edit(.lastlight/pr-review/findings.json)')" "1"
 
-# Scoped, not bare. An unscoped Write would let the reviewer edit the code it
+# Scoped, not bare. An unscoped grant would let the reviewer edit the code it
 # is reviewing -- including the guard scripts -- which is the whole reason the
 # rule is written as a path.
-ok "the Write is scoped to that one path" \
-  "$(tools_for '' | grep -cx 'Write')" "0"
-ok "...and so is the Edit" \
+ok "the grant is scoped to that one path" \
   "$(tools_for '' | grep -cx 'Edit')" "0"
+# ...and no Write rule at all: the CLI rejects one, and a rejected rule is the
+# under-equipped-reviewer case this script calls fatal.
+ok "and no Write rule is emitted" \
+  "$(tools_for '' | grep -c '^Write' || true)" "0"
 ok "sandboxed grants no bare Write either" \
   "$(tools_for /tmp/ws | grep -cx 'Write')" "0"
 
@@ -284,6 +292,47 @@ ok "a rejected rule is detected" "$(trr "$TRR/rejected.log")" "yes"
 ok "a clean log is not" "$(trr "$TRR/clean.log")" "no"
 ok "a missing log is not, and does not crash" "$(trr "$TRR/absent.log")" "no"
 
+# The wording the CLI uses TODAY, copied from a real run. The pattern knew only
+# the older phrasing, so the guard went quiet when the message changed and a
+# rejected rule rode through unreported -- which is how a Write(path) rule this
+# script emitted itself reached a review unnoticed.
+printf '%s\n' \
+  'Permission allow rule (--allowed-tools): Write(.lastlight/pr-review/findings.json) is not matched by file permission checks - only Edit(path) rules are. Use Edit(.lastlight/pr-review/findings.json) instead (Edit rules cover all file-editing tools).' \
+  > "$TRR/current.log"
+ok "the current CLI wording is detected too" "$(trr "$TRR/current.log")" "yes"
+# ...and prose that merely mentions permissions is not a rejection.
+printf 'checking permission rules for the session\n' > "$TRR/chatty.log"
+ok "an ordinary mention of rules is not" "$(trr "$TRR/chatty.log")" "no"
+
+echo "--- a timeout must not assert what the log contains ---"
+# It said the log was empty "by construction", reasoning that SIGTERM flushes
+# nothing. The CLI writes startup diagnostics long before the kill, so a run
+# that timed out with a rejected rule in the log was sent to raise the timeout
+# -- the wrong next step -- by a message that had just called the file empty.
+: > "$TRR/empty.log"
+printf 'something the CLI said before it died\n' > "$TRR/spoke.log"
+
+ok "an empty log is described as empty" \
+  "$(timeout_message "$TRR/empty.log" 900 | grep -c 'is empty' || true)" "1"
+ok "a log with content is not" \
+  "$(timeout_message "$TRR/spoke.log" 900 | grep -c 'is empty' || true)" "0"
+ok "...and the reader is sent to it" \
+  "$(timeout_message "$TRR/spoke.log" 900 | grep -c "$TRR/spoke.log" || true)" "1"
+# A log that was never created reads as empty rather than crashing.
+ok "a missing log is described as empty" \
+  "$(timeout_message "$TRR/absent.log" 900 | grep -c 'is empty' || true)" "1"
+ok "the timeout is named so it can be raised" \
+  "$(timeout_message "$TRR/empty.log" 900 | grep -c '900s' || true)" "1"
+
+# ...and the call site actually defers to it. Asserting on the helper alone
+# left the wiring untested: restoring the old hardcoded message at the call
+# site broke no assertion, because the helper was still present and still
+# right. The runner must not carry a second opinion about the log.
+ok "the timeout branch defers to it" \
+  "$(grep -c 'timeout_message "' "$RUN" || true)" "1"
+ok "nothing else claims to know the log is empty" \
+  "$(grep -c 'reviewer.log is empty' "$RUN" || true)" "0"
+
 # The check was written with `rg`, which this script does not require. On a
 # machine without it the command exits 127, the `if` body is skipped, and an
 # under-equipped reviewer still writes an attestation. This asserts the
@@ -309,9 +358,17 @@ echo "--- the prompt and the write rule must name the same path ---"
 # want of a findings file -- on exactly the platforms with no sandbox.
 PROMPT=$(prompt /some/root origin/main deadbeef /some/assets)
 review_tools ''
-WRULE=$(printf "%s\n" "${REVIEW_TOOLS[@]}" | grep -m1 "^Write(")
-WPATH=${WRULE#Write(}
+# Edit, not Write. A path rule is matched only as Edit(path) -- and an Edit
+# rule already covers every file-editing tool -- so a Write(path) rule beside
+# it is not redundant belt and braces, it is rejected, which this script treats
+# as a fatal under-equipped reviewer. It emitted one and tripped its own guard.
+ok "no Write rule is emitted" \
+  "$(printf "%s\n" "${REVIEW_TOOLS[@]}" | grep -c "^Write(" || true)" "0"
+WRULE=$(printf "%s\n" "${REVIEW_TOOLS[@]}" | grep -m1 "^Edit(")
+WPATH=${WRULE#Edit(}
 WPATH=${WPATH%)}
+ok "the findings file is granted to Edit" \
+  "$([[ -n $WRULE ]] && echo yes || echo no)" "yes"
 
 ok "the rule is relative" "$([[ $WPATH == /* ]] && echo absolute || echo relative)" "relative"
 ok "the prompt names that exact path" \
