@@ -304,6 +304,25 @@ ok "the current CLI wording is detected too" "$(trr "$TRR/current.log")" "yes"
 printf 'checking permission rules for the session\n' > "$TRR/chatty.log"
 ok "an ordinary mention of rules is not" "$(trr "$TRR/chatty.log")" "no"
 
+echo "--- the runner refuses a skipped review ---"
+# The reviewer writes this file inside the sandbox, having read a diff this
+# script calls untrusted. `skip` is the schema's own escape hatch for GitHub
+# conditions no local run can be in, so a diff that persuades the reviewer to
+# set it would otherwise produce an attestation for a review that never ran.
+SKIPDIR=$(mktemp -d)
+printf '{"skip": true}' > "$SKIPDIR/skip.json"
+printf '{"skip": false, "event": "APPROVE"}' > "$SKIPDIR/ok.json"
+printf '{"event": "APPROVE"}' > "$SKIPDIR/absent.json"
+
+ok "a skipped review is recognised" "$(findings_skipped "$SKIPDIR/skip.json")" "yes"
+ok "an ordinary one is not" "$(findings_skipped "$SKIPDIR/ok.json")" "no"
+ok "...nor is one that omits the field" "$(findings_skipped "$SKIPDIR/absent.json")" "no"
+# ...and the run acts on it. Asserting on the helper alone leaves the wiring
+# untested, which is how the timeout message below kept a second opinion.
+ok "the run refuses when it says yes" \
+  "$(grep -c 'findings_skipped "' "$RUN" || true)" "1"
+rm -rf "$SKIPDIR"
+
 echo "--- a timeout must not assert what the log contains ---"
 # It said the log was empty "by construction", reasoning that SIGTERM flushes
 # nothing. The CLI writes startup diagnostics long before the kill, so a run

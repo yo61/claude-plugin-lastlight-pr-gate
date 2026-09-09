@@ -645,5 +645,33 @@ fi
 ok "one row per workspace, whatever the tree contains" \
   "$(cd "$LIST_SRC" && LASTLIGHT_WORK_ROOT=$LIST_ROOT "$WORK" list 2> /dev/null | grep -c .)" "1"
 
+echo "--- start will not reuse a workspace that is not this clone ---"
+# `land` has always refused a workspace whose origin is not this repository.
+# `start` had no equivalent, so a clone interrupted partway -- a dropped
+# network, a full disk, a Ctrl-C -- left a directory that exists and is not a
+# repository, and the next start printed "reusing" and opened a session inside
+# the wreckage. That surfaces at land time, or never.
+start_again() {
+  (
+    cd "$LIST_SRC" || exit 1
+    PATH=$LIST_STUB:$PATH LASTLIGHT_WORK_VERIFY=off LASTLIGHT_WORK_ROOT=$LIST_ROOT \
+      "$WORK" start -b feat/listcase > /dev/null 2>&1
+  ) && echo pass || echo refuse
+}
+
+if [[ -n $LIST_WS ]]; then
+  # The control first: an intact workspace is still reused, so what refuses
+  # below is the damage rather than the reuse itself.
+  ok "an intact workspace is still reused" "$(start_again)" "pass"
+
+  mv "$LIST_WS/.git" "$LIST_WS/.git-moved"
+  ok "a workspace with no git dir is refused" "$(start_again)" "refuse"
+  mv "$LIST_WS/.git-moved" "$LIST_WS/.git"
+
+  # ...and one that is a repository, but somebody else's.
+  git -C "$LIST_WS" remote set-url origin /some/other/project
+  ok "a clone of another repository is refused" "$(start_again)" "refuse"
+fi
+
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]

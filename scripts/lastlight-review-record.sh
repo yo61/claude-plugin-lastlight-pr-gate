@@ -82,17 +82,21 @@ main() {
 
   require_attestation "$root" "$sha"
 
-  local skip count event
-  skip=$(jq -r '.skip // false' "$root/$FINDINGS")
+  local count event
   event=$(jq -r '.event // "MISSING"' "$root/$FINDINGS")
   count=$(jq -r '(.findings // []) | length' "$root/$FINDINGS")
 
-  if [[ $skip != true && $event == MISSING ]]; then
+  # No `skip` here. The findings schema carries one for the GitHub flow --
+  # bot-authored, already merged, already reviewed -- and none of those can be
+  # true of a local base..HEAD run, where the review either happened or did
+  # not. Honouring it cleared both bars below at once, so `{"skip": true}` was
+  # a complete pass with no event and no findings.
+  if [[ $event == MISSING ]]; then
     die "$FINDINGS has no \`event\` -- it must be APPROVE, REQUEST_CHANGES or COMMENT (see the skill's findings schema)"
   fi
 
   local dismissed_n=0
-  if [[ $skip != true && $count -gt 0 ]]; then
+  if [[ $count -gt 0 ]]; then
     require_dismissals "$root" "$count"
     dismissed_n=$count
   fi

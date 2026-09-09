@@ -277,6 +277,17 @@ main() {
   jq -e . "$OUT_DIR/findings.json" > /dev/null 2>&1 \
     || die "the reviewer wrote invalid JSON to findings.json"
 
+  # Syntax was the ONLY thing checked here, and the schema carries a `skip`
+  # flag for conditions that belong to the GitHub flow -- bot-authored,
+  # already merged, already reviewed -- none of which a local base..HEAD run
+  # can be in. Refusing it matters because of what this script says about its
+  # own input at the top: the diff is untrusted, and it is read by the session
+  # writing this file. A diff that talks the reviewer into skipping otherwise
+  # earns a correctly-computed attestation for a review that never ran.
+  if [[ $(findings_skipped "$OUT_DIR/findings.json") == yes ]]; then
+    die "the reviewer set \`skip\`, which no local review can be eligible for -- so nothing was reviewed. See $OUT_DIR/reviewer.log"
+  fi
+
   # Binds the review to the exact diff it saw. The recorder refuses a marker
   # whose attestation does not match the current HEAD and diff.
   #
@@ -459,6 +470,18 @@ reviewer_git_env() {
 # rule (--allowed-tools): ... is not matched" the guard went quiet and a
 # rejected rule rode through unreported. Matching both is the cost of having no
 # machine-readable signal to check instead.
+# Whether the reviewer marked the review skipped.
+#
+# Extracted so it can be tested: the check it replaces sat inline in a function
+# that runs a model session, which is not something a suite can call.
+findings_skipped() {
+  if [[ $(jq -r '.skip // false' "$1" 2> /dev/null) == true ]]; then
+    printf 'yes'
+  else
+    printf 'no'
+  fi
+}
+
 tool_rule_rejected() {
   grep -qE 'Ignoring --allowedTools rule|Permission (allow|deny) rule \(--[a-z-]+\):.*not matched' \
     "$1" 2> /dev/null

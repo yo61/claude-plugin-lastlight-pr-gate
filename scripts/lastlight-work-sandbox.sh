@@ -586,6 +586,19 @@ cmd_start() {
   ws=$slot/repo
   settings=$slot/sandbox.json
   if [[ -e $ws ]]; then
+    # Reused only if it is what it claims to be. `land` refuses a workspace
+    # whose origin is not this repository, and this path had no equivalent --
+    # so a clone interrupted partway (a dropped network, a full disk, a Ctrl-C)
+    # left a directory that exists and is not a repository, and the next start
+    # said "reusing" and opened a session inside the wreckage. That is found at
+    # land time, or not at all.
+    #
+    # The same check as land, for the same reason: whatever put the directory
+    # there, it is not something to work in unattended.
+    local ws_origin
+    ws_origin=$(git -C "$ws" remote get-url origin 2> /dev/null || true)
+    [[ -n $ws_origin && $(resolve "$ws_origin") == "$root" ]] \
+      || die "the workspace at $ws is not a clone of this repository (its origin is '${ws_origin:-unset}'), so it is not safe to reuse. Remove it and start again."
     printf 'reusing the existing workspace for %s\n' "$branch" >&2
   else
     make_workspace "$root" "$branch" "$ws"

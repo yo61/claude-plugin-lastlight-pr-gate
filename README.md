@@ -310,11 +310,11 @@ for t in tests/*.test.sh; do bash "$t"; done
 
 | suite | cases | covers |
 |---|---|---|
-| `lastlight-review-gate.test.sh` | 228 | what is gated, what is allowed through |
-| `lastlight-review-record.test.sh` | 13 | the pass bar and the attestation binding |
-| `lastlight-review-run.test.sh` | 95 | flag parsing, the prompt, the defaults, the tool allowlist, and what may cross back out of the sandbox |
+| `lastlight-review-gate.test.sh` | 233 | what is gated, what is allowed through |
+| `lastlight-review-record.test.sh` | 16 | the pass bar and the attestation binding |
+| `lastlight-review-run.test.sh` | 99 | flag parsing, the prompt, the defaults, the tool allowlist, and what may cross back out of the sandbox |
 | `lastlight-sandbox.test.sh` | 106 | review isolation, the containment verdict, and what the branch may not own |
-| `lastlight-work-sandbox.test.sh` | 133 | work isolation, policy spelling, landing |
+| `lastlight-work-sandbox.test.sh` | 136 | work isolation, policy spelling, landing |
 
 Counts are what each suite prints when you run it, not a count of lines that
 look like assertions — several derive their cases from the credential list, so

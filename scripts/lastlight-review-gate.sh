@@ -121,8 +121,32 @@ deny() {
 #
 # The LAST one wins, because that is where the shell ends up.
 cd_target() {
-  local cmd=$1 p=$2 seg arg rc
+  local cmd=$1 p=$2 seg arg rc last
+  local -a stack=()
   while IFS= read -r seg; do
+    # A subshell keeps its directory change to itself: `(cd /elsewhere)` leaves
+    # the outer shell where it was, so anything after the closing paren still
+    # runs here. With the parens dropped that read like a cd that persists, and
+    # the command was judged in a repository bash was never going to run it in.
+    #
+    # A STACK, not a depth counter, and a cd inside one still counts. The
+    # caller passes the text UP TO the command being judged, so an unclosed
+    # paren means that command is itself inside the subshell -- which is why
+    # `(cd repo && git push)` has to see the cd, while
+    # `(cd repo); git push` must not. Skipping anything nested got the
+    # second right and the first wrong.
+    if [[ $seg == "(" ]]; then
+      stack+=("$p")
+      continue
+    fi
+    if [[ $seg == ")" ]]; then
+      if [[ ${#stack[@]} -gt 0 ]]; then
+        last=$((${#stack[@]} - 1))
+        p=${stack[$last]}
+        unset "stack[$last]"
+      fi
+      continue
+    fi
     arg=$(cd_argument "$seg")
     rc=$?
     # Not a cd at all: this segment moves nothing.
@@ -198,15 +222,16 @@ resolve_target() {
   # it to the hook's cwd, naming a directory that does not exist and refusing
   # a reviewed push there.
   [[ -n $p ]] || p=$(cd_target "$cmd" "$fallback")
-  # ...and it has to BE a repository. A `cd` inside a closed subshell does not
-  # move where a later command runs, so `(cd /tmp); git push origin main`
-  # resolved /tmp, found no git dir there, and the caller returned 0 -- allowing
-  # a push that bash ran in the original repository. Falling back to where the
-  # command actually runs turns that into the ordinary check.
+  # ...and it has to BE a repository. Anything else -- a path that does not
+  # exist, a directory that is not a checkout -- means the parse produced
+  # something the command could not have been run in, so the answer is where it
+  # actually runs.
   #
-  # This does not model subshells, and does not need to: the contract asks the
-  # gate to recognise ordinary spellings and to fail toward the command's own
-  # directory, not to track shell scope.
+  # This is a backstop, not the subshell rule. It was once described as one,
+  # which only held while the subshell named somewhere that was not a
+  # repository: when it named one, that directory was trusted outright and the
+  # push was judged somewhere bash was never going to run it. cd_target tracks
+  # the parens instead.
   if [[ -n $p && -d $p ]] && git -C "$p" rev-parse --git-dir > /dev/null 2>&1; then
     printf '%s' "$p"
   else
@@ -502,7 +527,19 @@ shell_segments() {
             resume_dq--
             print seg; seg = ""; mode = "dq"; continue
           }
-          if (c == "\n" || c == ";" || c == "|" || c == "(" || c == ")") {
+          # A paren is emitted as its own segment rather than dropped, so a
+          # reader can tell what a subshell contains. A cd in there does not
+          # move the shell that runs anything after the closing paren, and
+          # with the parens gone `(cd /elsewhere)` looked exactly like a cd
+          # that persists. Callers that tokenize get a lone "(" word, which is
+          # no command they look for.
+          #
+          # Only when resume_dq is 0, so the ")" that closes a "$(" belongs to
+          # the branch above and the two stay balanced.
+          if (c == "(" || c == ")") {
+            print seg; print c; seg = ""; continue
+          }
+          if (c == "\n" || c == ";" || c == "|") {
             print seg; seg = ""; continue
           }
           # A backtick separates, and stays on the segment it ends: the rule

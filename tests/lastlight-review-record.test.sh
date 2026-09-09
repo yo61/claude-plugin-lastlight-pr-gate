@@ -156,6 +156,30 @@ SHARED=$(grep -o "^readonly LASTLIGHT_EXCLUDE=.*" "$(dirname "$RECORD")/lastligh
 same "the shared constant is readable" "$([[ -n $SHARED ]] && echo yes || echo no)" "yes"
 same "the recorder uses the same pathspec" "$(grep -c -F -- "$SHARED" "$RECORD")" "1"
 
+echo "--- $(skip) is not a way to pass ---"
+# The findings schema carries `skip` for the GitHub flow -- bot-authored,
+# already merged, already reviewed -- and none of those can be true of a local
+# base..HEAD run. Honouring it here cleared BOTH bars at once: no event needed,
+# no findings to dismiss. The diff is untrusted input by this codebase's own
+# doctrine, so a diff that talks the reviewer into writing it earned a
+# correctly-computed attestation for a review that never ran.
+jq -n '{skip:true, summary:"skipped"}' > "$OUT/findings.json"
+attest "$(head_sha)" base "$(real_diff_hash)"
+expect refuse "skip:true with no event"
+
+# ...and it does not rescue undismissed findings either, which is the other bar
+# it used to clear.
+jq -n '{skip:true, summary:"s", event:"REQUEST_CHANGES",
+        findings:[{title:"x",severity:"Critical"}]}' > "$OUT/findings.json"
+attest "$(head_sha)" base "$(real_diff_hash)"
+expect refuse "skip:true over undismissed findings"
+
+# The control: the same shape without skip, with an event and no findings,
+# still passes -- so what refuses above is the skip, not the shape.
+jq -n '{summary:"s", event:"APPROVE", findings:[]}' > "$OUT/findings.json"
+attest "$(head_sha)" base "$(real_diff_hash)"
+expect pass "the same file without skip"
+
 echo "--- the recorder refuses inside a work workspace ---"
 # Recording there unlocks nothing that should be unlocked, and the ordinary
 # mistake is to finish in the workspace and record on the spot. Refusing at

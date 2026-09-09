@@ -636,6 +636,27 @@ expect deny "the previous directory is not guessed at" \
   "cd $OPTOUT && cd - && git push origin main"
 expect deny "...nor is a bare cd" "cd && git push origin main"
 
+echo "--- a closed subshell does not move where the push is judged ---"
+# shell_segments split on parens and dropped them, so `(cd elsewhere)` was
+# indistinguishable from a cd that persists -- and the push was judged in a
+# repository bash was never going to run it in. The opted-out checkout makes
+# arriving there visible as an allow.
+unmark
+expect deny "a closed subshell is left behind" \
+  "(cd $OPTOUT); git push origin main"
+expect deny "...joined with && rather than ;" \
+  "(cd $OPTOUT) && git push origin main"
+expect deny "...nested two deep" \
+  "((cd $OPTOUT)); git push origin main"
+# A command substitution runs in its own shell too, and the same applies.
+expect deny "...and a command substitution" \
+  "echo \$(cd $OPTOUT); git push origin main"
+# ...while a push that really does run inside the subshell is judged there,
+# which is what a depth cutoff got wrong: the text handed here stops at the
+# command being judged, so an unclosed paren means it is inside one.
+expect allow "a push inside the subshell is judged inside it" \
+  "(cd $OPTOUT && git push origin main)"
+
 echo "--- a chain of relative moves ends where the shell ends ---"
 # Only the LAST cd argument was kept, and it was joined to the directory the
 # hook was started in rather than to where the chain had already arrived. So
