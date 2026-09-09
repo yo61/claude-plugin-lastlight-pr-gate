@@ -46,11 +46,44 @@ readonly MARKER_DIR=lastlight-local-review
 # session, so a marker in it proves nothing, and the documented way out of a
 # workspace is `land` -- which fast-forwards into the real repository, where the
 # review is then run and recorded.
-readonly WORK_SENTINEL=lastlight-work-sandbox
+# The registry of live work workspaces, written by lastlight-work-sandbox.sh.
+#
+# OUTSIDE every path a work session can write, which is the whole point. The
+# signal used to be a file in the clone's own git dir, and a session can write
+# anywhere under its workspace -- so it could delete the signal, forge a review
+# marker beside it, and push without landing back for a review. The proof that
+# code may leave the sandbox was stored inside the sandbox.
+#
+# Agreed with that script by location and file format rather than by shared
+# code, since neither sources the other: first line the workspace, second the
+# repository it came from.
+readonly WORKSPACE_REGISTRY=${LASTLIGHT_WORKSPACE_REGISTRY:-$HOME/.lastlight/workspaces}
+
+# The repository a workspace came from, or empty when this is not a workspace.
+#
+# Compared on the RESOLVED path: the registry records what `start` created, and
+# a command may reach the same directory by a different spelling.
+workspace_origin() {
+  local target=$1 entry recorded resolved
+  [[ -d $WORKSPACE_REGISTRY ]] || return 1
+  resolved=$(cd "$target" 2> /dev/null && pwd -P) || return 1
+  for entry in "$WORKSPACE_REGISTRY"/*; do
+    [[ -f $entry ]] || continue
+    recorded=$(head -1 "$entry" 2> /dev/null) || continue
+    [[ -n $recorded ]] || continue
+    recorded=$(cd "$recorded" 2> /dev/null && pwd -P) || continue
+    if [[ $recorded == "$resolved" ]]; then
+      sed -n 2p "$entry" 2> /dev/null
+      return 0
+    fi
+  done
+  return 1
+}
 
 work_sandbox_message() {
   local from
-  from=$(cat "$1/$WORK_SENTINEL" 2> /dev/null || printf 'the real repository')
+  from=${1:-}
+  [[ -n $from ]] || from='the real repository'
   printf '%s' "This is a work sandbox workspace, and nothing reaches a remote from here.
 
 The clone's git dir is writable by this session, so a review recorded in it
@@ -614,7 +647,7 @@ shell_words() {
 # and exited, and the unreviewed branch went to the remote unexamined. Every
 # gate here answers for its own invocation and leaves the others to be judged.
 gate_pr_open() {
-  local cmd=$1 cwd=$2 target gitdir head
+  local cmd=$1 cwd=$2 target gitdir head origin
   target=$(resolve_target "$cmd" "$cwd")
   [[ -n $target && -d $target ]] || return 0
   gitdir=$(git -C "$target" rev-parse --git-dir 2> /dev/null) || return 0
@@ -622,7 +655,7 @@ gate_pr_open() {
   # Sentinel first, for the reason gate_push_segment gives: in a work clone the
   # opt-out is a file the session can write, so honouring it first let one
   # `touch` undo the sentinel.
-  [[ -f "$gitdir/$WORK_SENTINEL" ]] && deny "$(work_sandbox_message "$gitdir")"
+  origin=$(workspace_origin "$target") && deny "$(work_sandbox_message "$origin")"
   [[ -e "$gitdir/lastlight-review-gate-off" ]] && return 0
   head=$(git -C "$target" rev-parse HEAD 2> /dev/null) || return 0
   [[ -f "$gitdir/$MARKER_DIR/$head.json" ]] && return 0
@@ -863,7 +896,7 @@ push_has_flag() {
 # ends the hook for the whole command line, and that is precisely how a dry run
 # chained after a real push came to speak for it.
 gate_push_segment() {
-  local seg=$1 prefix=$2 cwd=$3 w target gitdir dir="" first=1
+  local seg=$1 prefix=$2 cwd=$3 w target gitdir dir="" first=1 origin
   local -a args=()
   while IFS= read -r w; do
     if [[ $first -eq 1 ]]; then
@@ -895,7 +928,7 @@ gate_push_segment() {
   # pushing the tag lands unreviewed code with no marker and no `land`. "A
   # tag-only push lands nothing new" holds for a repository whose commits
   # arrived through reviewed pushes; a work clone has its own.
-  [[ -f "$gitdir/$WORK_SENTINEL" ]] && deny "$(work_sandbox_message "$gitdir")"
+  origin=$(workspace_origin "$target") && deny "$(work_sandbox_message "$origin")"
   [[ -e "$gitdir/lastlight-review-gate-off" ]] && return 0
 
   # Nothing lands: deletions and tag-only pushes.

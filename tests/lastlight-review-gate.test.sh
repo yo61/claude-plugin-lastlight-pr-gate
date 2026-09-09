@@ -699,8 +699,13 @@ echo "--- nothing reaches a remote from a work workspace ---"
 # `expect` is this suite's helper; a plain comparison needs its own, and the
 # first version of these cases called `ok`, which does not exist here -- so
 # they ran silently and the count never moved.
-workspace_on() { printf '%s\n' "/some/real/repo" > "$REPO/.git/lastlight-work-sandbox"; }
-workspace_off() { rm -f "$REPO/.git/lastlight-work-sandbox"; }
+export LASTLIGHT_WORKSPACE_REGISTRY=$TMP/registry
+workspace_on() {
+  mkdir -p "$LASTLIGHT_WORKSPACE_REGISTRY"
+  printf '%s\n%s\n' "$(cd "$REPO" && pwd -P)" "/some/real/repo" \
+    > "$LASTLIGHT_WORKSPACE_REGISTRY/1"
+}
+workspace_off() { rm -rf "$LASTLIGHT_WORKSPACE_REGISTRY"; }
 
 SHA=$(git -C "$REPO" rev-parse HEAD)
 workspace_on

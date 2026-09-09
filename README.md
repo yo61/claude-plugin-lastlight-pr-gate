@@ -207,6 +207,19 @@ written only by a review run in the real repository, and only a marker opens the
 push gate. Landing moves code onto a branch; the gate still decides whether it
 can leave.
 
+The same argument applies to the signal that says *this is a workspace at all*.
+It used to be a file in the clone's own git dir, which meant a session could
+delete it, write a marker beside it, and push. Live workspaces are recorded in
+`~/.lastlight/workspaces/` instead — one small file per workspace, holding the
+workspace path and the repository it came from. That directory sits outside
+`allowWrite`, so no spawned process can write it, and it is refused to the
+`Edit` tool explicitly, because the two layers cover different things. It stays
+*readable*, since the gate runs inside the session and has to tell a workspace
+from an ordinary checkout; it holds paths, not secrets.
+
+Entries are pruned when the workspace they name is gone, so nothing has to be
+cleaned up by hand.
+
 ## What is and is not gated
 
 The line is **new SHAs delivered to origin**. `docs/gate-contract.md` states
@@ -301,7 +314,7 @@ for t in tests/*.test.sh; do bash "$t"; done
 | `lastlight-review-record.test.sh` | 13 | the pass bar and the attestation binding |
 | `lastlight-review-run.test.sh` | 84 | flag parsing, the prompt, the defaults, the tool allowlist, and what may cross back out of the sandbox |
 | `lastlight-sandbox.test.sh` | 106 | review isolation, the containment verdict, and what the branch may not own |
-| `lastlight-work-sandbox.test.sh` | 117 | work isolation, policy spelling, landing |
+| `lastlight-work-sandbox.test.sh` | 127 | work isolation, policy spelling, landing |
 
 Counts are what each suite prints when you run it, not a count of lines that
 look like assertions — several derive their cases from the credential list, so

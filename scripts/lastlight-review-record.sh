@@ -42,6 +42,26 @@ main() {
 
   local root sha head
   root=$(git rev-parse --show-toplevel 2> /dev/null) || die "not inside a git repository"
+
+  # A review recorded inside a work clone unlocks nothing that should be
+  # unlocked: the push gate refuses that clone outright, and the marker would
+  # sit in a git dir the session can write. Refusing here stops the ordinary
+  # mistake -- finishing in the workspace and recording there -- at the point it
+  # is made, rather than at the push.
+  local registry=${LASTLIGHT_WORKSPACE_REGISTRY:-$HOME/.lastlight/workspaces}
+  local entry recorded here
+  here=$(cd "$root" 2> /dev/null && pwd -P) || here=""
+  if [[ -n $here && -d $registry ]]; then
+    for entry in "$registry"/*; do
+      [[ -f $entry ]] || continue
+      recorded=$(head -1 "$entry" 2> /dev/null) || continue
+      [[ -n $recorded ]] || continue
+      recorded=$(cd "$recorded" 2> /dev/null && pwd -P) || continue
+      [[ $recorded == "$here" ]] || continue
+      die "this is a work sandbox workspace; land the work first, then review and record in the repository it came from"
+    done
+  fi
+
   head=$(git rev-parse HEAD)
   sha=${1:-$head}
   # Accept an abbreviated sha, but store the full one -- the gate keys on it.
@@ -80,14 +100,6 @@ main() {
   local marker_dir
   local gitdir
   gitdir=$(git rev-parse --git-dir)
-  # A review recorded inside a work clone unlocks nothing that should be
-  # unlocked: the push gate refuses that clone outright, and the marker would
-  # sit in a git dir the session can write. Refusing here stops the ordinary
-  # mistake -- finishing in the workspace and recording there -- at the point it
-  # is made, rather than at the push.
-  if [[ -f "$gitdir/lastlight-work-sandbox" ]]; then
-    die "this is a work sandbox workspace; land the work first, then review and record in the repository it came from"
-  fi
   marker_dir="$gitdir/$MARKER_DIR"
   mkdir -p "$marker_dir"
   jq -n \

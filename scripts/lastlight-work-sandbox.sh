@@ -199,8 +199,13 @@ _deny_below() {
 # because a deny beats an allow and it would otherwise lock the session out of
 # its own tree.
 home_siblings_denied() {
-  local root=${1:-} ws=${2:-}
-  _deny_below "$HOME" "$root" "$ws"
+  local root=${1:-} ws=${2:-} registry=${3:-}
+  # The registry is a KEEP, so the walk descends past it rather than denying it
+  # wholesale. The gate runs inside this session and has to read it to tell a
+  # workspace from a real repository; reading costs nothing, since it holds
+  # paths rather than secrets. Writing is refused by the Edit deny beside it
+  # and by allowWrite, which covers the workspace and not its grandparent.
+  _deny_below "$HOME" "$root" "$ws" "$registry"
 }
 
 # A file the Read tool must not be able to reach, and the token proving it.
@@ -245,8 +250,63 @@ work_read_canary() {
 # the workspace, and the real repository is denied outright. A marker store the
 # session cannot write at all would close this properly; see the note in the
 # README.
-work_sentinel_path() {
-  printf '%s/.git/%s' "$1" "lastlight-work-sandbox"
+# Where the registry lives: outside every path a work session can write.
+#
+# NOT derived from WORK_ROOT. If someone points that at $TMPDIR -- which is in
+# allowWrite so that probes and build tools can stage through it -- a registry
+# beside it would be writable by the session it exists to constrain.
+work_registry_dir() {
+  printf '%s' "${LASTLIGHT_WORKSPACE_REGISTRY:-$HOME/.lastlight/workspaces}"
+}
+
+# The entry for a workspace, or empty when it has none. Scanned rather than
+# addressed by a hash of the path: this script and the gate do not source each
+# other, so a shared digest would be two copies of one function, and an encoded
+# path runs into the 255-byte filename limit. There is one entry per live
+# workspace.
+work_registry_entry() {
+  local ws=$1 dir entry
+  dir=$(work_registry_dir)
+  [[ -d $dir ]] || return 1
+  for entry in "$dir"/*; do
+    [[ -f $entry ]] || continue
+    if [[ $(head -1 "$entry" 2> /dev/null) == "$ws" ]]; then
+      printf '%s' "$entry"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Record a workspace. The file holds the workspace path on the first line and
+# the repository it came from on the second, which is what the refusal message
+# needs to name the way back.
+work_registry_add() {
+  local ws=$1 root=$2 dir
+  dir=$(work_registry_dir)
+  mkdir -p "$dir" || die "could not create the workspace registry at $dir"
+
+  # Drop entries whose workspace is gone. Nothing removes a workspace but a
+  # person with rm, so without this the registry only grows. A stale entry is
+  # harmless -- no target ever matches a path that does not exist -- but a
+  # store that never shrinks stops being readable by anyone checking it.
+  local stale
+  for stale in "$dir"/*; do
+    [[ -f $stale ]] || continue
+    [[ -d $(head -1 "$stale" 2> /dev/null) ]] || rm -f "$stale"
+  done
+
+  work_registry_entry "$ws" > /dev/null && return 0
+  local n=1
+  while [[ -e "$dir/$n" ]]; do n=$((n + 1)); done
+  printf '%s\n%s\n' "$ws" "$root" > "$dir/$n" \
+    || die "could not record the workspace in $dir"
+}
+
+work_registry_remove() {
+  local ws=$1 entry
+  entry=$(work_registry_entry "$ws") || return 0
+  rm -f "$entry"
 }
 
 # Whether a workspace sits inside a tree the policy denies editing.
@@ -287,7 +347,8 @@ work_settings_json() {
     --argjson deny "$(edit_denied_paths | jq -R . | jq -s .)" \
     --argjson secrets "$(edit_denied_paths | jq -R . | jq -s 'map("Edit(/" + . + ")", "Edit(/" + . + "/**)")')" \
     --argjson readdeny "$(edit_denied_paths | jq -R . | jq -s 'map("Read(/" + . + ")", "Read(/" + . + "/**)")')" \
-    --argjson siblings "$(home_siblings_denied "$root" "$ws" | jq -R . | jq -s 'map("Read(/" + . + ")", "Read(/" + . + "/**)", "Edit(/" + . + ")", "Edit(/" + . + "/**)")')" \
+    --argjson siblings "$(home_siblings_denied "$root" "$ws" "$(work_registry_dir)" | jq -R . | jq -s 'map("Read(/" + . + ")", "Read(/" + . + "/**)", "Edit(/" + . + ")", "Edit(/" + . + "/**)")')" \
+    --argjson registry "$(work_registry_dir | jq -R . | jq -s 'map("Edit(/" + . + ")", "Edit(/" + . + "/**)")')" \
     --arg readcanary "$(work_read_canary)" \
     --argjson net "$(work_allowed_domains | jq -R . | jq -s .)" \
     '{
@@ -305,7 +366,7 @@ work_settings_json() {
         # named list and the enumeration. A repeated rule is harmless to the
         # CLI but makes the policy unreadable and its assertions ambiguous.
         deny: ((["Edit(/\($root)/**)", "Read(/\($readcanary))", "Edit(/\($readcanary))"]
-                + $secrets + $readdeny + $siblings) | unique)
+                + $secrets + $readdeny + $siblings + $registry) | unique)
       }
     }'
 }
@@ -512,7 +573,7 @@ cmd_start() {
   sandbox_supported || die "no OS sandbox available here, so the work cannot be confined. Refusing to pretend otherwise."
   workspace_is_denied "$ws" \
     && die "the workspace at $ws sits inside a tree this policy denies editing, so the session could not edit its own files. Point LASTLIGHT_WORK_ROOT somewhere else."
-  printf '%s\n' "$root" > "$(work_sentinel_path "$ws")"
+  work_registry_add "$ws" "$root"
   work_settings_json "$ws" "$root" > "$settings"
 
   if [[ ${LASTLIGHT_WORK_VERIFY:-on} == off ]]; then

@@ -505,11 +505,78 @@ ok "the probe is granted Read" \
 ok "...and the full expected set" \
   "$(work_probe_tools)" "Bash,Write,Read"
 
-echo "--- start marks the clone as a workspace ---"
-# The gate and the recorder both key off this file; without it a workspace
-# is indistinguishable from the repository it came from.
-ok "the sentinel path is inside the clone git dir" \
-  "$(work_sentinel_path /some/ws)" "/some/ws/.git/lastlight-work-sandbox"
+echo "--- the workspace signal lives outside the workspace ---"
+# It used to be a file inside the clone git dir, which a session can write with
+# Bash or Edit -- so it could delete the signal, forge a marker in its own
+# .git, and push without ever landing back for a review. The proof that code
+# may leave the sandbox was stored inside the sandbox.
+REG=$TMP/registry
+export LASTLIGHT_WORKSPACE_REGISTRY=$REG
+
+REG_WS=$TMP/regws/repo
+mkdir -p "$REG_WS"
+work_registry_add "$REG_WS" "/some/real/repo"
+
+ok "the entry is outside the workspace" \
+  "$(work_registry_entry "$REG_WS" | grep -c "^$REG/" || true)" "1"
+ok "...and records the workspace" \
+  "$(head -1 "$(work_registry_entry "$REG_WS")")" "$REG_WS"
+ok "...and the repository it came from" \
+  "$(sed -n 2p "$(work_registry_entry "$REG_WS")")" "/some/real/repo"
+# Registering twice must not mint a second entry, or `start` on an existing
+# workspace would grow the store every time.
+work_registry_add "$REG_WS" "/some/real/repo"
+ok "registering again is idempotent" "$(find "$REG" -type f | grep -c . || true)" "1"
+
+# Nothing removes a workspace but a person with rm, so entries are pruned when
+# the directory they name is gone. A store that only grows stops being useful
+# to anything that reads it.
+mkdir -p "$TMP/regws2/repo"
+work_registry_add "$TMP/regws2/repo" "/some/real/repo"
+rm -rf "$TMP/regws2"
+work_registry_add "$REG_WS" "/some/real/repo"
+ok "a stale entry is pruned" "$(find "$REG" -type f | grep -c . || true)" "1"
+
+ok "removing deregisters it" \
+  "$(
+    work_registry_remove "$REG_WS"
+    find "$REG" -type f | grep -c . || true
+  )" "0"
+
+echo "--- and the policy keeps it readable but not writable ---"
+work_registry_add "$REG_WS" "/some/real/repo"
+REG_POLICY=$(work_settings_json "/some/real/repo" "$REG_WS")
+# Readable, because the gate runs INSIDE the session and has to tell a
+# workspace from a real repository. It holds paths, not secrets.
+ok "the registry is not read-denied" \
+  "$(jq -r '.permissions.deny[]' <<< "$REG_POLICY" | grep -c "^Read(/$REG" || true)" "0"
+# ...and that has to be measured where the sibling walk can actually reach it.
+# Under $TMP it never does, so the keep looked irrelevant: removing it changed
+# no assertion until the registry sat inside the HOME being walked.
+HOMEREG=$FAKE/.lastlight/workspaces
+mkdir -p "$HOMEREG"
+home_reg_denied() {
+  HOME="$FAKE" LASTLIGHT_WORK_ROOT="$FAKE/.lastlight/work" \
+    LASTLIGHT_WORKSPACE_REGISTRY="$HOMEREG" \
+    bash -c 'source "$1" 2>/dev/null; home_siblings_denied "" "$2" "$(work_registry_dir)"' \
+    _ "$WORK" "$MYWS"
+}
+ok "a registry inside HOME survives the sibling walk" \
+  "$(home_reg_denied | grep -cx "$HOMEREG" || true)" "0"
+# ...while an ordinary sibling beside it is still denied, so the keep is doing
+# the work rather than the walk having stopped early.
+mkdir -p "$FAKE/.lastlight/unrelated"
+ok "...and its neighbour is still denied" \
+  "$(home_reg_denied | grep -cx "$FAKE/.lastlight/unrelated" || true)" "1"
+# ...and refused to the Edit tool, which the filesystem sandbox does not cover.
+ok "...but the Edit tool is refused it" \
+  "$(jq -r '.permissions.deny[]' <<< "$REG_POLICY" | grep -c "^Edit(/$REG" || true)" "2"
+# ...and outside allowWrite, which is what stops Bash writing it.
+ok "...and it is not writable by a spawned process" \
+  "$(jq -r '.sandbox.filesystem.allowWrite[]' <<< "$REG_POLICY" | grep -c "$REG" || true)" "0"
+work_registry_remove "$REG_WS"
+unset LASTLIGHT_WORKSPACE_REGISTRY
+
 echo "--- list must not invent workspaces ---"
 # `find` descended INTO each clone, so any directory named `repo` inside a
 # checked-out tree came back as a workspace of its own -- a project with

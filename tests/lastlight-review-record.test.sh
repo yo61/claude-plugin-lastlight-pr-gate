@@ -160,8 +160,11 @@ echo "--- the recorder refuses inside a work workspace ---"
 # Recording there unlocks nothing that should be unlocked, and the ordinary
 # mistake is to finish in the workspace and record on the spot. Refusing at
 # the point it is made says so; refusing at the push would not explain why.
-printf '%s\n' "/some/real/repo" > "$REPO/.git/lastlight-work-sandbox"
+export LASTLIGHT_WORKSPACE_REGISTRY=$TMP/registry
+mkdir -p "$LASTLIGHT_WORKSPACE_REGISTRY"
+printf '%s\n%s\n' "$(cd "$REPO" && pwd -P)" "/some/real/repo" \
+  > "$LASTLIGHT_WORKSPACE_REGISTRY/1"
 expect refuse "recording inside a work workspace"
-rm -f "$REPO/.git/lastlight-work-sandbox"
+rm -rf "$LASTLIGHT_WORKSPACE_REGISTRY"
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]
