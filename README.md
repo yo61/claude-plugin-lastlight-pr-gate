@@ -285,9 +285,9 @@ The gate reduces rounds. These reduce reviews outright, and are server-side:
 - Per repo: `touch "$(git rev-parse --git-dir)/lastlight-review-gate-off"`
 - Disable: `claude plugin disable lastlight-pr-gate@yo61-skills`
 
-Known false positive: `grep` matches line-by-line, so a heredoc that *writes* a
-script containing `git push` trips the gate. Use the per-repo opt-out, or write
-the file with the Write tool.
+A heredoc that *writes* a script containing `git push` does not trip the gate:
+the body is data, and the scan reads the words a shell would produce rather
+than matching text line by line.
 
 ## Tests
 
@@ -297,7 +297,7 @@ for t in tests/*.test.sh; do bash "$t"; done
 
 | suite | cases | covers |
 |---|---|---|
-| `lastlight-review-gate.test.sh` | 201 | what is gated, what is allowed through |
+| `lastlight-review-gate.test.sh` | 206 | what is gated, what is allowed through |
 | `lastlight-review-record.test.sh` | 13 | the pass bar and the attestation binding |
 | `lastlight-review-run.test.sh` | 76 | flag parsing, the prompt, the defaults, the tool allowlist, and what may cross back out of the sandbox |
 | `lastlight-sandbox.test.sh` | 101 | review isolation, the containment verdict, and what the branch may not own |

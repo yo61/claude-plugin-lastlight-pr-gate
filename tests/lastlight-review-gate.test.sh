@@ -471,6 +471,20 @@ mark "$(git -C "$REPO" rev-parse HEAD)"
 expect allow "a remote from a variable" 'git push "$REMOTE" main'
 expect allow "...with no ref at all" 'git push "$REMOTE"'
 expect deny "...while a REF from one is still refused" 'git push origin $BRANCH'
+# ...but a SUBSTITUTION in the remote slot severs the refs: the segmenter cuts
+# there, so the refspecs land in a segment with no `git push` in it and this
+# call sees a remote and nothing else -- then falls back to HEAD, which a
+# review of HEAD vouches for. An unreviewed ref went out that way.
+#
+# The two are told apart by the CUT, not by the expansion: a substitution ends
+# the segment, so its marker is the LAST word, while `git push "$REMOTE" main`
+# keeps its refs and its marker is not.
+git -C "$REPO" branch -q unrev HEAD~1 2> /dev/null || true
+expect deny "a remote from a substitution, refs severed" 'git push $(echo origin) unrev'
+expect deny "...quoted" 'git push "$(echo origin)" unrev'
+expect deny "...backticked" 'git push `echo origin` unrev'
+git -C "$REPO" branch -q -D unrev 2> /dev/null || true
+
 unmark
 
 echo "--- a trailing comment is not part of the command ---"
@@ -557,6 +571,24 @@ expect deny "...after &&" 'true && gh pr create --fill'
 expect allow "prose mentioning gh pr create" 'echo gh pr create --fill'
 
 echo "--- a PR-open is judged where it runs ---"
+# EVERY opening, not just the first. The loop recorded one and judged once, so
+# a second `gh pr create` -- in another directory, against another repository
+# -- rode through unexamined behind an open that was fine here.
+PR_SECOND=$TMP/second
+mkdir -p "$PR_SECOND"
+git init -q -b main "$PR_SECOND"
+git -C "$PR_SECOND" config user.email t@t
+git -C "$PR_SECOND" config user.name t
+echo x > "$PR_SECOND/f.txt"
+git -C "$PR_SECOND" add f.txt
+git -C "$PR_SECOND" commit -qm "feat: initial"
+
+mark "$(git -C "$REPO" rev-parse HEAD)"
+expect allow "one open, here, reviewed" 'gh pr create --fill'
+expect deny "a second open elsewhere is judged too" \
+  "gh pr create --fill ; cd $PR_SECOND && gh pr create --fill"
+unmark
+
 # gate_pr_open was handed the WHOLE command line, and resolve_target takes the
 # last `cd` it can see -- including one in a segment AFTER the call. So a
 # PR-open was judged against a directory it never runs in: allowed when a later

@@ -22,10 +22,6 @@
 #   - a dry run (`--dry-run`)
 # Also allowed: anything outside a git repo, and repos that opt out.
 #
-# KNOWN FALSE POSITIVE: `grep` matches line-by-line, so a heredoc that WRITES a
-# script containing `git push` trips this. Rare, and recoverable -- use the
-# per-repo opt-out, or write the file with the Write tool instead.
-#
 # Marker: .git/lastlight-local-review/<sha>.json, written by
 # lastlight-review-record.sh, which enforces the pass bar. Keyed by SHA, so a new
 # commit, amend or rebase correctly re-arms the gate -- which is what makes
@@ -189,6 +185,17 @@ pushed_revs() {
         # changes which SHAs land, markers being repo-local and keyed by SHA.
         if [[ $seen_remote -eq 0 ]]; then
           seen_remote=1
+          # A bare marker as the LAST word means the segmenter cut here, so the
+          # refspecs are in a segment this call cannot see -- `git push
+          # $(echo origin) unrev` reached the remote rule with nothing after it
+          # and fell back to HEAD, which a review of HEAD then vouched for.
+          #
+          # `git push "$REMOTE" main` keeps its refs and its marker is not
+          # last, so the two are told apart by the cut rather than by the
+          # expansion.
+          if [[ $tok == '$' || $tok == '`' ]]; then
+            printf '?\n'
+          fi
           continue
         fi
         printf '?\n'
@@ -656,20 +663,19 @@ main() {
   # the last `cd` it can see, so a `cd` in a later segment -- or inside a
   # closed subshell -- decided where a PR-open was judged. Allowed when that
   # named an opted-out repository, denied when it named an unreviewed one.
-  local opens=0 s pr_prefix="" opens_prefix=""
+  # EVERY opening segment, not the first. The guard here used to stop at one,
+  # so a second `gh pr create` -- in another directory, against another
+  # repository -- was never examined. Every gate in this file answers for its
+  # own invocation; that is what the per-segment loop is for.
+  local s pr_prefix=""
   while IFS= read -r s; do
     pr_prefix="$pr_prefix$s;"
-    if [[ $opens -eq 0 ]] && { segment_opens_pr "$s" || gh_api_creates_pr "$s"; }; then
-      opens=1
-      opens_prefix=$pr_prefix
+    if segment_opens_pr "$s" || gh_api_creates_pr "$s"; then
+      gate_pr_open "$pr_prefix" "$cwd"
     fi
   done < <(shell_segments "$cmd")
 
-  if [[ $opens -eq 1 ]]; then
-    gate_pr_open "$opens_prefix" "$cwd"
-  fi
-
-  # PER INVOCATION, for the reason gh_api_creates_pr_anywhere already splits: the
+  # PER INVOCATION, for the reason the gh scan splits too: the
   # arguments were read out of the whole command line, so
   # `git push origin HEAD ; git push --dry-run` had the dry run's flags stand
   # in for both pushes and the real one went out. Verified -- denied alone,
