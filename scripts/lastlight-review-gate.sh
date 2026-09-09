@@ -392,16 +392,8 @@ gh_api_creates_pr() {
   done
   [[ $names_collection -eq 1 ]] || return 1
 
-  # Field flags make gh POST whatever the method says, and creating a pull
-  # request needs them -- title, head, base.
-  for ((i = 0; i < n; i++)); do
-    case ${words[i]} in
-      -f* | -F* | --field* | --raw-field* | --input*) return 0 ;;
-      *) ;; # not a field flag
-    esac
-  done
-
-  # ...or an explicit POST. The LAST method named is the one gh uses.
+  # The method first, because it decides what the field flags MEAN. The LAST
+  # one named is the one gh uses.
   for ((i = 0; i < n; i++)); do
     case ${words[i]} in
       -X | --method) [[ $((i + 1)) -lt $n ]] && method=${words[i + 1]} ;;
@@ -411,6 +403,23 @@ gh_api_creates_pr() {
     esac
   done
   method=$(tr '[:lower:]' '[:upper:]' <<< "$method")
+
+  # An explicit GET or HEAD is a read whatever follows it. gh documents that
+  # with `-X GET` the -f/-F values become QUERY PARAMETERS -- its own manual
+  # example is `gh api -X GET search/issues -f q=...`. Reading field flags
+  # first denied those, and reads are never blocked.
+  [[ $method == GET || $method == HEAD ]] && return 1
+
+  # Now the field flags mean what they usually mean: gh POSTs when they are
+  # present and nothing says otherwise, and creating a pull request needs them
+  # -- title, head, base.
+  for ((i = 0; i < n; i++)); do
+    case ${words[i]} in
+      -f* | -F* | --field* | --raw-field* | --input*) return 0 ;;
+      *) ;; # not a field flag
+    esac
+  done
+
   [[ $method == POST ]]
 }
 
@@ -753,16 +762,6 @@ gate_push_segment() {
   # only about ITSELF.
   push_has_flag --dry-run "${args[@]+"${args[@]}"}" && return 0
 
-  # A substitution in the push means the refs are not knowable from here.
-  # shell_words drops a backtick, leaving an empty word the loop above discards
-  # -- so the push looked like it named no ref, the gate substituted HEAD, and
-  # HEAD's marker vouched for whatever the substitution produced. The gh scan
-  # has had this test since the inversion; the push scan did not.
-  if grep -q '[$`]' <<< "$seg"; then
-    deny "$(gate_message "$(git -C "$cwd" rev-parse HEAD 2> /dev/null || echo HEAD)" \
-      'This push names its refs through a shell expansion, so the gate cannot tell which commits would land.')"
-  fi
-
   target=$(resolve_target "$prefix" "$cwd" "$dir")
   [[ -n $target && -d $target ]] || return 0
   gitdir=$(git -C "$target" rev-parse --git-dir 2> /dev/null) || return 0
@@ -788,6 +787,23 @@ gate_push_segment() {
   push_has_flag -d "${args[@]+"${args[@]}"}" && return 0
   if push_has_flag --tags "${args[@]+"${args[@]}"}"; then
     [[ -z $(pushed_revs "${args[@]+"${args[@]}"}") ]] && return 0
+  fi
+
+  # A substitution in the push means the refs are not knowable from here.
+  # shell_words drops a backtick, leaving an empty word the caller discards --
+  # so the push looked like it named no ref, the gate substituted HEAD, and
+  # HEAD's marker vouched for whatever the substitution produced.
+  #
+  # BELOW the sentinel, the opt-out and the nothing-lands returns, and that
+  # order is the point. Above them it denied a deletion carrying an expansion,
+  # which lands nothing, and it gated a repository whose opt-out was set --
+  # while printing a message offering that same opt-out as the remedy. A
+  # refusal that names a way out that does not work is worse than one that
+  # names none. It only has to precede the marker check: a push whose refs
+  # cannot be read cannot be matched against a marker.
+  if grep -q '[$`]' <<< "$seg"; then
+    deny "$(gate_message "$(git -C "$target" rev-parse HEAD 2> /dev/null || echo HEAD)" \
+      'This push names its refs through a shell expansion, so the gate cannot tell which commits would land.')"
   fi
 
   # `--all` / `--mirror` push a set this cannot enumerate from the command line.

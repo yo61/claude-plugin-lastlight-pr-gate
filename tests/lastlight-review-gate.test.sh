@@ -187,6 +187,15 @@ expect allow "a plain read" 'gh api repos/o/r/pulls/4'
 expect allow "reading the comments" 'gh api repos/o/r/pulls/4/comments'
 expect allow "an explicit GET" 'gh api --method GET repos/o/r/pulls'
 expect allow "a quoted GET" "gh api -X 'GET' repos/o/r/pulls"
+# gh documents that with an explicit GET the -f/-F values become QUERY
+# PARAMETERS -- its own manual example is `gh api -X GET search/issues -f q=...`.
+# The field-flag test used to run before the method was resolved, so these were
+# denied, and reads are never blocked.
+expect allow "field flags on an explicit GET" 'gh api -X GET repos/o/r/pulls -f state=closed'
+expect allow "...spelled --method GET" 'gh api --method GET repos/o/r/pulls -f state=closed'
+# ...while field flags with no method still POST, which is how a PR is created.
+expect deny "field flags with no method" 'gh api repos/o/r/pulls -f title=x'
+expect deny "...and with an explicit POST" 'gh api -X POST repos/o/r/pulls -f title=x'
 expect allow "an endpoint built from variables" 'gh api repos/$OWNER/$REPO/pulls'
 expect allow "a jq filter with a pipe in it" "gh api repos/o/r/pulls/4 --jq '.[] | .body'"
 expect allow "a read inside a substitution" 'echo "$(gh api repos/o/r/pulls)"'
@@ -355,6 +364,13 @@ expect deny "...unquoted, for scale" 'git push origin $(echo other)'
 expect deny "...a quoted variable" 'git push origin "$BRANCH"'
 # A dry run still sends nothing, whatever its arguments are made of.
 expect allow "a dry run with a substitution in it" 'git push --dry-run "$(echo x)"'
+# ...and neither does a deletion, which lands nothing whatever its arguments
+# are made of. The refusal used to run BEFORE the nothing-lands returns, the
+# work sentinel and the per-repo opt-out -- so it denied a deletion, and it
+# gated a repository whose opt-out was set while printing a message offering
+# that same opt-out as the remedy. A refusal naming a way out that does not
+# work is worse than one naming none.
+expect allow "a deletion with an expansion in it" 'git push origin --delete "$BRANCH"'
 
 # ...and the same, with HEAD REVIEWED. Above, every case denies whether or not
 # the expansion is noticed, because with no marker anywhere the HEAD fallback
@@ -526,6 +542,10 @@ workspace_off
 # point of having one.
 touch "$REPO/.git/lastlight-review-gate-off"
 expect allow "the opt-out still opts out" 'git push origin HEAD'
+# ...including for a push the gate cannot read. The expansion refusal ran above
+# this check and denied anyway, while telling the caller to set the very file
+# they had already set.
+expect allow "...even for a push with an expansion" 'git push origin "$BRANCH"'
 rm -f "$REPO/.git/lastlight-review-gate-off"
 
 # The sentinel used to be checked inside the per-rev loop, below the early
