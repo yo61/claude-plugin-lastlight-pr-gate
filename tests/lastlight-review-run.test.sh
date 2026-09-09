@@ -319,6 +319,15 @@ ok "the prompt names that exact path" \
 # ...and not the absolute form, which the rule would not match.
 ok "the prompt does not ask for an absolute write" \
   "$([[ $PROMPT == *"/some/root/$WPATH"* ]] && echo yes || echo no)" "no"
+echo "--- the unsandboxed branch passes a settings file ---"
+# It used to pass none, which is what left Read unrestricted there. Asserted on
+# the source because the branch only runs on a machine with no OS sandbox, and
+# the thing that went wrong was its absence rather than its content.
+ok "the fallback builds a deny-only policy" \
+  "$(grep -c 'sandbox_read_deny_settings_json' "$RUN")" "1"
+ok "...and hands it to the reviewer" \
+  "$(grep -c 'extra_args=(--settings' "$RUN")" "2"
+
 echo "--- the runner must not write through a committed symlink ---"
 # These writes happen in the REAL repository, before any workspace exists --
 # this process, outside any sandbox, with the user's privileges, on a checkout

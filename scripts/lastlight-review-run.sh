@@ -204,8 +204,20 @@ main() {
       *) die "the sandbox did not engage -- a canary escaped the workspace. Refusing to run a probe-enabled review unconfined. Re-run with LASTLIGHT_REVIEW_SANDBOX=off for a read-only review." ;;
     esac
   else
+    # STILL DENY THE READS. Without a settings file the reviewer keeps the Read
+    # tool and no permissions.deny, so a prompt injection in the diff could read
+    # anything the user can and copy it into findings.json -- the artifact
+    # carried back out. "No Bash" is not containment; the sandboxed path has
+    # denied this since read_deny_rules existed and this branch had not.
+    settings_file=$(mktemp -t lastlight-review-deny)
+    # shellcheck disable=SC2064  # expand now, not at trap time
+    trap "rm -f '$settings_file'" EXIT
+    sandbox_read_deny_settings_json > "$settings_file"
+    extra_args=(--settings "$settings_file")
+
     printf '  NOT SANDBOXED -- read-only review, no probes.\n' >&2
-    printf '  The reviewed diff runs with your privileges; findings rest on reading, not execution.\n' >&2
+    printf '  Host reads are still denied; what is missing is the OS sandbox, so\n' >&2
+    printf '  nothing confines a spawned process -- which is why Bash is withheld.\n' >&2
   fi
 
   review_tools "$workspace"

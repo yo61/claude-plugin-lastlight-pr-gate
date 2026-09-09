@@ -276,6 +276,25 @@ sandbox_stage_assets() {
     || die "could not stage the review assets into the isolated workspace"
 }
 
+# The settings document for a review with NO OS sandbox: the Read denials and
+# nothing else.
+#
+# The unsandboxed fallback used to pass no settings at all, so an untrusted diff
+# could steer the reviewer into reading anything the user can and copying it
+# into findings.json -- the artifact deliberately carried back out. "No Bash"
+# is not containment: Read alone crosses the same boundary, and the copy-out
+# channel is the whole point of the run.
+#
+# Same rules as the sandboxed path, from read_deny_rules, so the two cannot be
+# given different boundaries by editing one of them. No sandbox block: there
+# are no spawned processes to confine without Bash, and asking for a sandbox
+# here is what the caller has already established is unavailable.
+sandbox_read_deny_settings_json() {
+  jq -n \
+    --argjson readdeny "$(read_deny_rules | jq -R . | jq -s .)" \
+    '{ disableAllHooks: true, permissions: { deny: $readdeny } }'
+}
+
 sandbox_settings_json() {
   local workspace=$1 tmp
   # A scratch directory, because the whole point of this sandbox is that the

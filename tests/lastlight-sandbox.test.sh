@@ -457,5 +457,24 @@ ok "ANTHROPIC_API_KEY is passed through, deliberately" \
 ok "...and CLAUDE_* with it" \
   "$(grep -c '^CLAUDE_CODE_SOMETHING=' <<< "$anth_env" || true)" "1"
 
+echo "--- the unsandboxed fallback still denies host reads ---"
+# With no OS sandbox the reviewer used to run with no settings file at all, so
+# it kept Read and no permissions.deny -- and a prompt injection in the diff
+# could read anything the user can and copy it into findings.json, the artifact
+# carried back out. "No Bash" is not containment.
+DENYONLY=$(sandbox_read_deny_settings_json)
+
+ok "it is a settings document" "$(jq -e 'type' <<< "$DENYONLY" 2> /dev/null)" '"object"'
+# The SAME rules as the sandboxed path, not a second list that can drift.
+ok "its denials are exactly read_deny_rules" \
+  "$(jq -r '.permissions.deny[]' <<< "$DENYONLY" | sort | tr '\n' ' ')" \
+  "$(read_deny_rules | sort | tr '\n' ' ')"
+ok "$HOME itself is denied" \
+  "$(jq -r '.permissions.deny[]' <<< "$DENYONLY" | grep -cx "Read(/$HOME)")" "1"
+# No sandbox block: there are no spawned processes to confine without Bash, and
+# asking for one here is what the caller has already found unavailable.
+ok "it claims no OS sandbox" "$(jq -r 'has("sandbox")' <<< "$DENYONLY")" "false"
+ok "hooks are still disabled" "$(jq -r '.disableAllHooks' <<< "$DENYONLY")" "true"
+
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]
