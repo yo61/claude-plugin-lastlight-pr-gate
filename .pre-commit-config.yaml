@@ -43,9 +43,12 @@ repos:
         pass_filenames: false
         always_run: true
 
+      # --rcfile so this and CI read the same settings. Without it shellcheck
+      # searches from each file upward and then $HOME, so a personal
+      # ~/.shellcheckrc decided what ran here and CI saw something else.
       - id: shellcheck
         name: shellcheck
-        entry: shellcheck
+        entry: shellcheck --rcfile=.shellcheckrc
         language: system
         types: [shell]
 

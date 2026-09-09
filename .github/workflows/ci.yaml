@@ -104,8 +104,12 @@ jobs:
       - name: shellcheck version matches the pin
         run: bash tests/shellcheck-version.sh
 
+      # --rcfile, not a search. shellcheck otherwise takes the first
+      # .shellcheckrc found from each file upward and then $HOME, so the
+      # settings depend on where the checkout sits -- which is how a personal
+      # config leaked into local runs and made them disagree with this job.
       - name: shellcheck
-        run: shellcheck scripts/*.sh tests/*.sh
+        run: shellcheck --rcfile=.shellcheckrc scripts/*.sh tests/*.sh
 
       # -i 2 -bn -ci -sr is the project standard, matching the local prek hook
       # and the editor, so a file formatted on save passes here unchanged.

@@ -36,4 +36,16 @@ if [[ $have != "$SHELLCHECK_VERSION" ]]; then
   exit 1
 fi
 
-printf 'shellcheck %s matches the pinned version\n' "$have"
+# ...and both invocations have to NAME the config, or shellcheck searches from
+# each file upward and then $HOME -- which is how a personal ~/.shellcheckrc
+# decided what ran locally while CI saw something else. Same version, same
+# command, different settings.
+for caller in .github/workflows/ci.yaml .pre-commit-config.yaml; do
+  if ! grep -q -- '--rcfile=.shellcheckrc' "$SELF_DIR/../$caller"; then
+    printf '%s invokes shellcheck without --rcfile, so it reads whatever config\n' "$caller" >&2
+    printf 'the machine happens to provide. Name the file.\n' >&2
+    exit 1
+  fi
+done
+
+printf 'shellcheck %s matches the pinned version, and both callers name the config\n' "$have"
