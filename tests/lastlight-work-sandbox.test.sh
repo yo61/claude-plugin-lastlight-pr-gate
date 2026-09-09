@@ -664,12 +664,23 @@ echo "--- start will not reuse a workspace that is not this clone ---"
 # network, a full disk, a Ctrl-C -- left a directory that exists and is not a
 # repository, and the next start printed "reusing" and opened a session inside
 # the wreckage. That surfaces at land time, or never.
+# Whether the workspace was refused, which is what these cases are about --
+# NOT whether `start` exited 0. It clones before it checks for an OS sandbox,
+# so on a host without one it builds the workspace and then dies with the reuse
+# check having passed. Reading the status conflated the two and made this pass
+# on macOS and fail on Linux.
 start_again() {
-  (
+  local out
+  out=$(
     cd "$LIST_SRC" || exit 1
     PATH=$LIST_STUB:$PATH LASTLIGHT_WORK_VERIFY=off LASTLIGHT_WORK_ROOT=$LIST_ROOT \
-      "$WORK" start -b feat/listcase > /dev/null 2>&1
-  ) && echo pass || echo refuse
+      "$WORK" start -b feat/listcase 2>&1
+  )
+  if grep -q "is not a clone of this repository" <<< "$out"; then
+    echo refuse
+  else
+    echo pass
+  fi
 }
 
 if [[ -n $LIST_WS ]]; then
