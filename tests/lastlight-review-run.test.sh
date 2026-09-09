@@ -353,6 +353,22 @@ rm -f "$RS/repo/.lastlight/pr-review/diff.patch"
 printf 'x\n' > "$RS/repo/.lastlight/pr-review/diff.patch"
 ok "an ordinary output directory passes" \
   "$( (refuse_symlinked_outputs "$RS/repo") 2>&1 | grep -c 'is a symlink' || true)" "0"
+# ...and ANY symlink in there, not a list of the names written today. The first
+# version enumerated them and missed reviewer.log, which the runner redirects
+# into at the point it starts the reviewer.
+ln -s "$RS/victim" "$RS/repo/.lastlight/pr-review/reviewer.log"
+ok "a symlink at reviewer.log is refused too" \
+  "$( (refuse_symlinked_outputs "$RS/repo") 2>&1 | grep -c 'is a symlink' || true)" "1"
+rm -f "$RS/repo/.lastlight/pr-review/reviewer.log"
+# A name nobody has written yet is covered by the same scan.
+ln -s "$RS/victim" "$RS/repo/.lastlight/pr-review/something-new.json"
+ok "...and one nobody writes yet" \
+  "$( (refuse_symlinked_outputs "$RS/repo") 2>&1 | grep -c 'is a symlink' || true)" "1"
+rm -f "$RS/repo/.lastlight/pr-review/something-new.json"
+# The directory itself, and its parent.
+ln -s /tmp "$RS/repo/.lastlight/linked"
+ok "an unrelated symlink beside it is ignored" \
+  "$( (refuse_symlinked_outputs "$RS/repo") 2>&1 | grep -c 'is a symlink' || true)" "0"
 
 echo "--- findings_contained: the copy-back must not follow a link out ---"
 # Ground truth, not a mock: real directories, real links, and the same helper

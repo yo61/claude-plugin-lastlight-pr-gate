@@ -394,10 +394,21 @@ main() {
 # overwritten with the runner's own output.
 refuse_symlinked_outputs() {
   local root=$1 p
-  for p in ".lastlight" "$OUT_DIR" "$OUT_DIR/diff.patch" "$OUT_DIR/findings.json" \
-    "$OUT_DIR/attestation.json"; do
+  for p in ".lastlight" "$OUT_DIR"; do
     if [[ -L "$root/$p" ]]; then
-      die "$root/$p is a symlink. This runner writes there with your privileges, before any sandbox exists, so it will not follow it. Remove or replace it."
+      die "$root/$p is a symlink. This runner writes below it with your privileges, before any sandbox exists, so it will not follow it. Remove or replace it."
+    fi
+  done
+
+  # Everything already in there, rather than a list of the names this runner
+  # happens to write today. The first version enumerated them and missed
+  # reviewer.log; a list is correct until someone adds a write.
+  [[ -d "$root/$OUT_DIR" ]] || return 0
+  local entry
+  for entry in "$root/$OUT_DIR"/* "$root/$OUT_DIR"/.[!.]*; do
+    [[ -e $entry || -L $entry ]] || continue
+    if [[ -L $entry ]]; then
+      die "$entry is a symlink. This runner writes there with your privileges, before any sandbox exists, so it will not follow it. Remove or replace it."
     fi
   done
 }
