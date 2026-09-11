@@ -32,9 +32,23 @@ repos:
   # formatting, silently.
   - repo: local
     hooks:
+      # Before shellcheck itself: a clean run from a different build does not
+      # mean what CI's run means, and that difference has already pushed a red
+      # branch. The pinned version lives in .shellcheck-version, which the
+      # workflow installs from.
+      - id: shellcheck-version
+        name: shellcheck version matches the pin
+        entry: bash tests/shellcheck-version.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      # --rcfile so this and CI read the same settings. Without it shellcheck
+      # searches from each file upward and then $HOME, so a personal
+      # ~/.shellcheckrc decided what ran here and CI saw something else.
       - id: shellcheck
         name: shellcheck
-        entry: shellcheck
+        entry: shellcheck --rcfile=.shellcheckrc
         language: system
         types: [shell]
 
@@ -46,12 +60,67 @@ repos:
 
       # The gate is only as good as its test suite, and the allow-cases are
       # the half that stops it crying wolf. Run them on every commit.
+      # `env GATE=...` pins the suite to the copy in this repo. It used to be
+      # load-bearing: the suite defaulted to the INSTALLED hook under
+      # ~/.claude/hooks, so without it a broken script here passed and a broken
+      # installed copy failed a clean commit. The suites resolve their own
+      # target from BASH_SOURCE now, so this is a second layer rather than the
+      # thing holding it up — and it stays, because what the hook validates
+      # should not depend on a default in another file. `env` rather than a
+      # shell assignment because `entry` is exec'd, not shell-interpreted.
       - id: gate-tests
         name: gate test suite
-        entry: bash tests/lastlight-review-gate.test.sh
+        entry: env GATE=./scripts/lastlight-review-gate.sh bash tests/lastlight-review-gate.test.sh
         language: system
         pass_filenames: false
         files: '^(scripts|tests)/.*\.sh$'
+
+      - id: sandbox-tests
+        name: sandbox policy suite
+        entry: env SANDBOX=./scripts/lastlight-sandbox.sh bash tests/lastlight-sandbox.test.sh
+        language: system
+        pass_filenames: false
+        files: '^(scripts|tests)/.*\.sh$'
+
+      - id: recorder-tests
+        name: recorder test suite
+        entry: env RECORD=./scripts/lastlight-review-record.sh bash tests/lastlight-review-record.test.sh
+        language: system
+        pass_filenames: false
+        files: '^(scripts|tests)/.*\.sh$'
+
+      - id: work-sandbox-tests
+        name: work sandbox suite
+        entry: env WORK=./scripts/lastlight-work-sandbox.sh bash tests/lastlight-work-sandbox.test.sh
+        language: system
+        pass_filenames: false
+        files: '^(scripts|tests)/.*\.sh$'
+
+      - id: review-runner-tests
+        name: review runner suite
+        entry: env RUN=./scripts/lastlight-review-run.sh bash tests/lastlight-review-run.test.sh
+        language: system
+        pass_filenames: false
+        files: '^(scripts|tests)/.*\.sh$'
+
+      - id: readme-counts
+        name: README test counts match the suites
+        entry: bash tests/readme-counts.sh
+        language: system
+        pass_filenames: false
+        # scripts/ too, not just the suites. Several totals are derived rather
+        # than written down: the suites loop over `edit_denied_paths` and
+        # `sandbox_denied_reads`, which live in scripts/, so adding one
+        # credential store there moves three printed totals with no test file
+        # touched. Measured -- one line added to sandbox_denied_reads took that
+        # suite from 85 to 86 while this filter skipped the check.
+        #
+        # The suite hooks still passed, because their expectations derive from
+        # the same list, so the commit went green locally and CI -- which runs
+        # this unconditionally -- went red. That local-green/CI-red split is
+        # the bug class this check was added to prevent, reappearing in the
+        # check itself.
+        files: '^(README\.md|(scripts|tests)/.*\.sh)$'
 
   - repo: https://github.com/alessandrojcm/commitlint-pre-commit-hook
     rev: v9.26.0

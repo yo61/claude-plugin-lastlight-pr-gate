@@ -1,0 +1,14 @@
+# Lint settings for this project, in the repository so every environment reads
+# the same ones.
+#
+# Pinning the shellcheck BINARY was not enough. A personal ~/.shellcheckrc
+# carrying `external-sources=true` made local runs follow a sourced file that
+# CI would not, so `shellcheck scripts/*.sh tests/*.sh` passed here and failed
+# there with SC1091 -- same version, same command, different configuration.
+# shellcheck reads the first .shellcheckrc found from the file upward before
+# falling back to $HOME, so this one decides for this repository.
+
+# tests/shellcheck-version.sh sources .shellcheck-version, which is data rather
+# than a lint input. Without this, following it is refused (SC1091) and every
+# variable it defines then reads as unassigned (SC2154).
+external-sources=true
