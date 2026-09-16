@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1](https://github.com/yo61/claude-plugin-lastlight-pr-gate/compare/v0.2.0...v0.2.1) (2026-09-16)
+
+
+### Bug Fixes
+
+* clean up a workspace nobody else is going to ([70238ae](https://github.com/yo61/claude-plugin-lastlight-pr-gate/commit/70238ae5073f3bbddb6b2ba7f92f2c28646896ba))
+* clean up a workspace nobody else is going to ([60cac49](https://github.com/yo61/claude-plugin-lastlight-pr-gate/commit/60cac49ce8da216b0d738f9ac71beb11b3246d2e))
+
 ## [0.2.0](https://github.com/yo61/claude-plugin-lastlight-pr-gate/compare/v0.1.1...v0.2.0) (2026-09-16)
 
 
