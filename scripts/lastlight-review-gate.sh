@@ -63,6 +63,16 @@ readonly WORKSPACE_REGISTRY=${LASTLIGHT_WORKSPACE_REGISTRY:-$HOME/.lastlight/wor
 #
 # Compared on the RESOLVED path: the registry records what `start` created, and
 # a command may reach the same directory by a different spelling.
+#
+# The root OR ANYTHING BENEATH IT. The registry records the workspace root, but
+# resolve_target answers with the command's own directory -- so an exact
+# comparison left `cd sub && git push` unrecognised, the sentinel never fired,
+# and the gate fell back to the review marker, which inside a work clone is a
+# file the session can forge. One `cd` was the whole bypass.
+#
+# The slash in the pattern is load-bearing. A bare `"$recorded"*` would also
+# swallow a SIBLING that merely shares the name prefix -- /w/repo-other read as
+# inside /w/repo -- refusing reviewed pushes in an unrelated repository.
 workspace_origin() {
   local target=$1 entry recorded resolved
   [[ -d $WORKSPACE_REGISTRY ]] || return 1
@@ -72,7 +82,7 @@ workspace_origin() {
     recorded=$(head -1 "$entry" 2> /dev/null) || continue
     [[ -n $recorded ]] || continue
     recorded=$(cd "$recorded" 2> /dev/null && pwd -P) || continue
-    if [[ $recorded == "$resolved" ]]; then
+    if [[ $resolved == "$recorded" || $resolved == "$recorded"/* ]]; then
       sed -n 2p "$entry" 2> /dev/null
       return 0
     fi

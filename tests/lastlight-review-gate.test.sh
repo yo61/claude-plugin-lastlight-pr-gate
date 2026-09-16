@@ -845,6 +845,30 @@ expect deny "...nor opening a PR" 'gh pr create --fill'
 same "the refusal points at land" \
   "$(jq -n --arg c 'git push origin HEAD' --arg d "$REPO" \
     '{tool_name:"Bash",cwd:$d,tool_input:{command:$c}}' | "$GATE" | grep -c land)" "1"
+# ...and from BELOW the root, which the registry does not record. resolve_target
+# answers with the command's own directory, so an exact comparison left one `cd`
+# as the whole bypass: the sentinel never fired and the gate fell back to the
+# marker the session can forge in its own clone.
+mkdir -p "$REPO/sub/deeper"
+expect deny "a push from a subdirectory is still in the workspace" \
+  'git push origin HEAD' "$REPO/sub"
+expect deny "...however deep" 'git push origin HEAD' "$REPO/sub/deeper"
+expect deny "...reached by git -C from the root" "git -C $REPO/sub push origin HEAD"
+expect deny "...and a PR opened from below the root" 'gh pr create --fill' "$REPO/sub"
+# ...but a SIBLING sharing the name prefix is not inside it. This is what the
+# slash in the pattern buys: a bare prefix match would read repo-other as being
+# inside repo and refuse reviewed pushes in an unrelated repository.
+SIB=$TMP/repo-other
+git init -q -b main "$SIB"
+git -C "$SIB" config user.email t@t
+git -C "$SIB" config user.name t
+echo y > "$SIB/f.txt"
+git -C "$SIB" add f.txt
+git -C "$SIB" commit -qm "feat: initial"
+mkdir -p "$SIB/.git/lastlight-local-review"
+echo '{}' > "$SIB/.git/lastlight-local-review/$(git -C "$SIB" rev-parse HEAD).json"
+expect allow "a sibling sharing the name prefix is not the workspace" \
+  'git push origin HEAD' "$SIB"
 workspace_off
 # ...and with the sentinel gone the same marker works as it always did, so
 # the refusal is about the workspace, not about the marker.
