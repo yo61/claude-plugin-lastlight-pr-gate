@@ -5,9 +5,10 @@ export default {
     // Subject case relaxation: allow identifiers like Palette or OpportunityQuery
     // to start a subject. Matches yo61/jobhound's commitlint config.
     'subject-case': [0],
-    // Dependabot is configured to use `deps` so release-please routes these
-    // updates to the Dependencies changelog section instead of hiding them as
-    // chores. Keep commitlint aligned with that repo convention.
+    // Dependabot uses `chore(deps)` (see .github/dependabot.yaml), so tooling
+    // bumps land as chores and stay out of the changelog and the releases they
+    // would otherwise cut. `deps` stays in the enum below because commits in
+    // this history already use it.
     'type-enum': [
       2,
       'always',
