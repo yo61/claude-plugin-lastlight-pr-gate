@@ -59,7 +59,22 @@ ok() { # ok <condition-description> <actual> <expected>
 }
 
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
+# Workspaces this suite asked for and kept. A maker mints its own `mktemp -d`
+# and returns only the workspace inside it, so the parent is unreachable unless
+# it is recorded here -- and in production it is the RUNNER that removes it,
+# which a test never calls. Failed makers clean up after themselves now, so
+# these are only the ones that succeeded.
+WS_PARENTS=()
+# Call this in the CURRENT shell, never inside `$( )`: a command substitution
+# runs in a subshell, and an array appended to there is gone the moment it ends.
+# That is the same reason the maker cannot register its own parent from inside
+# one, and it is why the first attempt at this changed nothing at all.
+ws_keep() {
+  [[ -n $1 ]] && WS_PARENTS+=("$(dirname "$1")")
+  return 0
+}
+cleanup() { rm -rf "$TMP" ${WS_PARENTS[@]+"${WS_PARENTS[@]}"}; }
+trap cleanup EXIT
 POLICY=$(sandbox_settings_json "$TMP/ws")
 
 echo "--- the policy asserts every control the header claims ---"
@@ -134,6 +149,7 @@ git -C "$REPO" add f.txt
 git -C "$REPO" commit -qm "feat: base"
 SHA=$(git -C "$REPO" rev-parse HEAD)
 WS=$(cd "$REPO" && sandbox_make_workspace "$REPO" "$SHA")
+ws_keep "$WS"
 
 ok "checked out at the right sha" "$(git -C "$WS" rev-parse HEAD)" "$SHA"
 ok "content present" "$(cat "$WS/f.txt")" "original"
@@ -162,12 +178,14 @@ mkdir -p "$REPO/ignored" && echo junk > "$REPO/ignored/big.bin"
 git -C "$REPO" add .gitignore && git -C "$REPO" commit -qm "chore: ignore"
 
 WWS=$(cd "$REPO" && sandbox_make_working_workspace "$REPO")
+ws_keep "$WWS"
 ok "uncommitted change applied" "$(count_matching modified "$WWS/f.txt")" "1"
 ok "untracked file copied" "$([[ -f $WWS/new.txt ]] && echo yes || echo no)" "yes"
 ok "ignored tree NOT copied" "$([[ -d $WWS/ignored ]] && echo copied || echo excluded)" "excluded"
 ok "still an independent .git" "$([[ -d $WWS/.git ]] && echo yes || echo no)" "yes"
 # The whole point of the mode: a plain clone would have none of the above.
 PLAIN=$(cd "$REPO" && sandbox_make_workspace "$REPO" "$(git -C "$REPO" rev-parse HEAD)")
+ws_keep "$PLAIN"
 # Expecting 0 is the dangerous shape: a missing `rg` also produces 0, so this
 # passed on a runner without it while testing nothing.
 ok "a plain clone lacks it" "$(count_matching modified "$PLAIN/f.txt")" "0"
@@ -224,13 +242,21 @@ git -C "$CLINK/repo" add reaches-out
 git -C "$CLINK/repo" commit -qm "feat: link out"
 CLINK_BAD=$(git -C "$CLINK/repo" rev-parse HEAD)
 
-ok "a committed link out is refused" \
-  "$( (sandbox_make_workspace "$CLINK/repo" "$CLINK_BAD" > /dev/null 2>&1) && echo made || echo refused)" \
-  "refused"
+if CLINK_WS=$(sandbox_make_workspace "$CLINK/repo" "$CLINK_BAD" 2> /dev/null); then
+  ws_keep "$CLINK_WS"
+  CLINK_VERDICT=made
+else
+  CLINK_VERDICT=refused
+fi
+ok "a committed link out is refused" "$CLINK_VERDICT" "refused"
 # ...and the commit before it, in the same repository, still builds.
-ok "...while the commit before it builds" \
-  "$( (sandbox_make_workspace "$CLINK/repo" "$CLINK_OK" > /dev/null 2>&1) && echo made || echo refused)" \
-  "made"
+if CLINK_WS=$(sandbox_make_workspace "$CLINK/repo" "$CLINK_OK" 2> /dev/null); then
+  ws_keep "$CLINK_WS"
+  CLINK_VERDICT=made
+else
+  CLINK_VERDICT=refused
+fi
+ok "...while the commit before it builds" "$CLINK_VERDICT" "made"
 
 # `git checkout` materialises a committed symlink exactly as the branch spells
 # it, and `cp -RP` preserves an untracked one. The reviewer is always granted
@@ -242,15 +268,23 @@ OUTLINK=$TMP/outward
 mkdir -p "$OUTLINK"
 printf 'not for the reviewer\n' > "$OUTLINK/target.txt"
 ln -sfn "$OUTLINK/target.txt" "$REPO/reaches-out"
-ok "a workspace linking out is refused" \
-  "$( (sandbox_make_working_workspace "$REPO" > /dev/null 2>&1) && echo made || echo refused)" \
-  "refused"
+if OUT_WS=$(sandbox_make_working_workspace "$REPO" 2> /dev/null); then
+  ws_keep "$OUT_WS"
+  OUT_VERDICT=made
+else
+  OUT_VERDICT=refused
+fi
+ok "a workspace linking out is refused" "$OUT_VERDICT" "refused"
 rm -f "$REPO/reaches-out"
 # ...and with it gone the same repository builds, so the refusal is about the
 # link rather than anything else in the tree.
-ok "...and builds once it is gone" \
-  "$( (sandbox_make_working_workspace "$REPO" > /dev/null 2>&1) && echo made || echo refused)" \
-  "made"
+if OUT_WS=$(sandbox_make_working_workspace "$REPO" 2> /dev/null); then
+  ws_keep "$OUT_WS"
+  OUT_VERDICT=made
+else
+  OUT_VERDICT=refused
+fi
+ok "...and builds once it is gone" "$OUT_VERDICT" "made"
 
 echo "--- untracked files are copied faithfully, not approximately ---"
 mkdir -p "$REPO/nested/deep"
@@ -263,6 +297,7 @@ mkdir -p "$REPO/-webpack-cache"
 echo hyphen > "$REPO/-webpack-cache/thing.txt"
 ln -sfn nested/deep/file.txt "$REPO/inside-link"
 WWS2=$(sandbox_make_working_workspace "$REPO")
+ws_keep "$WWS2"
 ok "untracked file in a new subdirectory" \
   "$([[ -f "$WWS2/nested/deep/file.txt" ]] && echo yes || echo no)" "yes"
 ok "untracked filename containing spaces" \
@@ -553,6 +588,20 @@ ok "$HOME itself is denied" \
 # asking for one here is what the caller has already found unavailable.
 ok "it claims no OS sandbox" "$(jq -r 'has("sandbox")' <<< "$DENYONLY")" "false"
 ok "hooks are still disabled" "$(jq -r '.disableAllHooks' <<< "$DENYONLY")" "true"
+
+echo "--- a maker that dies takes its workspace with it ---"
+# The runner installs its EXIT trap on the parent only once a workspace comes
+# BACK, so anything that dies before the return is nobody's to clean up. That
+# leaked a clone of the repository on every refusal -- 144 of them, 32MB, found
+# on one machine -- and the two refusal cases above are exactly those paths.
+DISCARD=$(mktemp -d)
+(sandbox_discard_and_die "$DISCARD" "expected") > /dev/null 2>&1 || true
+ok "the half-built workspace is gone" \
+  "$([[ -d $DISCARD ]] && echo present || echo gone)" "gone"
+# ...and a caller with nothing half-built still dies, rather than taking the
+# empty string as a path and resolving it against the current directory.
+ok "an empty parent is not a path" \
+  "$( (sandbox_discard_and_die "" "expected") > /dev/null 2>&1 || echo died)" "died"
 
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]

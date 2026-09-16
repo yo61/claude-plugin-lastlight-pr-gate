@@ -374,6 +374,26 @@ sandbox_settings_json() {
     }'
 }
 
+# Remove the half-built workspace, then die.
+#
+# A maker that dies before it RETURNS leaves a directory nobody else knows
+# about: the runner installs its EXIT trap on the parent only once a workspace
+# comes back, so every refusal in here leaked a clone of the repository. In
+# production, and four times per run in the suite, which exercises exactly these
+# refusals -- 144 of them, 32MB, were found on one machine.
+#
+# `die` is defined by each calling script rather than here, so the cleanup
+# cannot live in it; this is the one choke point the makers share.
+sandbox_discard_and_die() {
+  local parent=$1
+  shift
+  # Absolute and not the root, so an empty value cannot collapse to the cwd.
+  if [[ -n $parent && $parent == /* && $parent != / ]]; then
+    rm -rf "$parent"
+  fi
+  die "$@"
+}
+
 # A disposable copy of HEAD. Prints the workspace path.
 # Refuse a checkout that links out of itself.
 #
@@ -393,7 +413,9 @@ sandbox_settings_json() {
 # or an attempt worth seeing, and quietly removing files would make the review
 # disagree with the diff it reports on.
 sandbox_refuse_outward_links() {
-  local ws=$1 link target parent resolved
+  # The parent is optional: a caller with nothing half-built to discard omits
+  # it, and sandbox_discard_and_die then simply dies.
+  local ws=$1 ws_parent=${2:-} link target parent resolved
   ws=$(cd "$ws" 2> /dev/null && pwd -P) || return 0
   while IFS= read -r -d "" link; do
     target=$(readlink -- "$link" 2> /dev/null) || continue
@@ -404,13 +426,14 @@ sandbox_refuse_outward_links() {
     case $resolved in
       "$ws" | "$ws"/*) continue ;;
     esac
-    die "the branch commits a symlink pointing outside the workspace: ${link#"$ws"/} -> $target. Refusing to review it -- the reviewer may read whatever that reaches, and anything it reads leaves through findings.json."
+    sandbox_discard_and_die "$ws_parent" "the branch commits a symlink pointing outside the workspace: ${link#"$ws"/} -> $target. Refusing to review it -- the reviewer may read whatever that reaches, and anything it reads leaves through findings.json."
   done < <(find "$ws" -path "$ws/.git" -prune -o -type l -print0 2> /dev/null)
 }
 
 sandbox_make_workspace() {
-  local root=$1 sha=$2 ws
-  ws=$(mktemp -d)/review
+  local root=$1 sha=$2 ws parent
+  parent=$(mktemp -d)
+  ws=$parent/review
   # Before the policy is written, and it must EXIST: a write to a path whose
   # parent does not exist fails with ENOENT, which is indistinguishable from a
   # sandbox refusing it -- the lesson the escape canary above was fixed for.
@@ -418,10 +441,10 @@ sandbox_make_workspace() {
   # --no-hardlinks: see the header. --shared would be faster and is exactly the
   # wrong thing here.
   git clone --quiet --no-hardlinks --no-checkout "$root" "$ws" 2> /dev/null \
-    || die "could not clone the repository into an isolated workspace"
+    || sandbox_discard_and_die "$parent" "could not clone the repository into an isolated workspace"
   git -C "$ws" checkout --quiet --detach "$sha" 2> /dev/null \
-    || die "could not check out ${sha:0:12} in the isolated workspace"
-  sandbox_refuse_outward_links "$ws"
+    || sandbox_discard_and_die "$parent" "could not check out ${sha:0:12} in the isolated workspace"
+  sandbox_refuse_outward_links "$ws" "$parent"
   printf '%s' "$ws"
 }
 
@@ -442,13 +465,14 @@ sandbox_make_workspace() {
 # on disk. A poisoned local dependency tree cannot execute during a review it
 # was never copied into.
 sandbox_make_working_workspace() {
-  local root=$1 ws patch
-  ws=$(mktemp -d)/review
+  local root=$1 ws patch parent
+  parent=$(mktemp -d)
+  ws=$parent/review
   mkdir -p "$(sandbox_scratch_dir "$ws")"
   git clone --quiet --no-hardlinks --no-checkout "$root" "$ws" 2> /dev/null \
-    || die "could not clone the repository into an isolated workspace"
+    || sandbox_discard_and_die "$parent" "could not clone the repository into an isolated workspace"
   git -C "$ws" checkout --quiet --detach HEAD 2> /dev/null \
-    || die "could not check out HEAD in the isolated workspace"
+    || sandbox_discard_and_die "$parent" "could not check out HEAD in the isolated workspace"
 
   patch=$(mktemp)
   # --binary, or a changed binary file yields a "Binary files differ" stanza with
@@ -458,7 +482,7 @@ sandbox_make_working_workspace() {
   git -C "$root" diff --binary HEAD -- "$LASTLIGHT_EXCLUDE" > "$patch"
   if [[ -s $patch ]]; then
     git -C "$ws" apply "$patch" 2> /dev/null \
-      || die "could not apply the uncommitted changes to the isolated workspace"
+      || sandbox_discard_and_die "$parent" "could not apply the uncommitted changes to the isolated workspace"
   fi
   rm -f "$patch"
 
@@ -482,11 +506,11 @@ sandbox_make_working_workspace() {
     # it printed nothing, mkdir -p made only the workspace root, and the copy
     # then failed with a message naming the file rather than the reason.
     mkdir -p "$ws/$(dirname -- "$f")" \
-      || die "could not create a directory for untracked '$f' in the isolated workspace"
+      || sandbox_discard_and_die "$parent" "could not create a directory for untracked '$f' in the isolated workspace"
     cp -RP -- "$root/$f" "$ws/$f" \
-      || die "could not copy untracked '$f' into the isolated workspace"
+      || sandbox_discard_and_die "$parent" "could not copy untracked '$f' into the isolated workspace"
   done < <(git -C "$root" ls-files --others --exclude-standard -z -- "$LASTLIGHT_EXCLUDE")
-  sandbox_refuse_outward_links "$ws"
+  sandbox_refuse_outward_links "$ws" "$parent"
   printf '%s' "$ws"
 }
 
