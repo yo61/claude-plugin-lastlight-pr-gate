@@ -238,6 +238,10 @@ main() {
     env_args=(-i)
     while IFS= read -r kv; do env_args+=("$kv"); done < <(sandbox_reviewer_env)
     while IFS= read -r kv; do env_args+=("$kv"); done < <(reviewer_git_env)
+    # LAST, so it overrides the TMPDIR/TMP/TEMP the keep-list carried through.
+    # The policy grants the per-review scratch directory and not the shared
+    # root, so a child still pointed at the root could not write a temp file.
+    while IFS= read -r kv; do env_args+=("$kv"); done < <(sandbox_scratch_env "$workspace")
   fi
 
   local rc=0

@@ -306,6 +306,39 @@ sandbox_read_deny_settings_json() {
     '{ disableAllHooks: true, permissions: { deny: $readdeny } }'
 }
 
+# A scratch directory for THIS review, so granting the reviewer somewhere to
+# write does not grant the shared temp root.
+#
+# `${workspace}.tmp`: a SIBLING of the clone, not a directory inside it. Inside,
+# it would show up as untracked in the very tree the reviewer reads, and
+# --working-tree mode copies untracked files in by design. A sibling also needs
+# no dirname arithmetic, which would resolve to `/` for a synthetic workspace
+# like `/ws` -- and granting `/` is the failure this whole function guards.
+#
+# Both workspace makers put the clone under its own `mktemp -d`, and the runner
+# removes that entire parent at its EXIT trap, so this is cleaned up with it and
+# needs no trap of its own.
+sandbox_scratch_dir() {
+  printf '%s.tmp' "$1"
+}
+
+# TMPDIR and its two aliases, pointed at the per-review scratch directory.
+#
+# Appended AFTER sandbox_reviewer_env when the child's environment is built:
+# `env` applies assignments left to right, so these override the inherited
+# values the keep-list carries. Without the override the child would still be
+# told to use the shared root, which is no longer writable -- so `mktemp -d`
+# would fail exactly as it did before that directory was granted at all.
+#
+# All three names. TMP and TEMP are in the keep-list too, and a tool that reads
+# one of those rather than TMPDIR would otherwise be sent somewhere it cannot
+# write.
+sandbox_scratch_env() {
+  local scratch
+  scratch=$(sandbox_scratch_dir "$1")
+  printf 'TMPDIR=%s\nTMP=%s\nTEMP=%s\n' "$scratch" "$scratch" "$scratch"
+}
+
 sandbox_settings_json() {
   local workspace=$1 tmp
   # A scratch directory, because the whole point of this sandbox is that the
@@ -314,7 +347,14 @@ sandbox_settings_json() {
   # $TMPDIR. Without it `mktemp -d` fails with "Operation not permitted" and
   # every such probe dies while the runner still prints "probes enabled".
   # Verified from inside a review running under this very policy.
-  tmp=$(cd "${TMPDIR:-/tmp}" && pwd -P)
+  #
+  # Scoped to THIS review, NOT the shared ${TMPDIR} root. allowWrite is
+  # recursive -- that is how $ws itself works -- so granting the root let a
+  # probe write over anything else staging through the same shared directory,
+  # including another concurrent session's scratch files. The reviewed diff is
+  # untrusted input by this file's own doctrine, so "it would have to be
+  # malicious" is not a mitigation. sandbox_scratch_env points the child here.
+  tmp=$(sandbox_scratch_dir "$workspace")
   jq -n \
     --arg ws "$workspace" \
     --arg tmp "$tmp" \
@@ -371,6 +411,10 @@ sandbox_refuse_outward_links() {
 sandbox_make_workspace() {
   local root=$1 sha=$2 ws
   ws=$(mktemp -d)/review
+  # Before the policy is written, and it must EXIST: a write to a path whose
+  # parent does not exist fails with ENOENT, which is indistinguishable from a
+  # sandbox refusing it -- the lesson the escape canary above was fixed for.
+  mkdir -p "$(sandbox_scratch_dir "$ws")"
   # --no-hardlinks: see the header. --shared would be faster and is exactly the
   # wrong thing here.
   git clone --quiet --no-hardlinks --no-checkout "$root" "$ws" 2> /dev/null \
@@ -400,6 +444,7 @@ sandbox_make_workspace() {
 sandbox_make_working_workspace() {
   local root=$1 ws patch
   ws=$(mktemp -d)/review
+  mkdir -p "$(sandbox_scratch_dir "$ws")"
   git clone --quiet --no-hardlinks --no-checkout "$root" "$ws" 2> /dev/null \
     || die "could not clone the repository into an isolated workspace"
   git -C "$ws" checkout --quiet --detach HEAD 2> /dev/null \
@@ -641,6 +686,11 @@ printf ' read=%s' '<the first line, or REFUSED>' >> '${inside}'"
   # a setup the review does not run in.
   local -a probe_env=(-i)
   while IFS= read -r kv; do probe_env+=("$kv"); done < <(sandbox_reviewer_env)
+  # Including the scratch override, LAST, for the reason above: the policy grants
+  # the per-review scratch directory and not the shared root, so a probe left
+  # pointed at the root would be proving containment under an environment the
+  # review never runs in -- and could not write a temp file if it needed one.
+  while IFS= read -r kv; do probe_env+=("$kv"); done < <(sandbox_scratch_env "$workspace")
   # From a directory of its own, NOT the checkout being verified.
   #
   # CLAUDE.md is auto-discovered from the session's cwd, and this inherited the

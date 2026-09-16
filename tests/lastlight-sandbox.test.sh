@@ -75,9 +75,31 @@ ok "writes include the workspace" \
 # enabled" -- observed from inside a review running under this policy.
 ok "...and a scratch directory for probes" \
   "$(jq -r '.sandbox.filesystem.allowWrite | length' <<< "$POLICY")" "2"
+# Scoped to THIS review, not the shared ${TMPDIR} root. allowWrite is recursive,
+# so granting the root let a probe write over anything else staging through the
+# same directory -- another concurrent session's scratch files included.
+ok "...scoped to this review, beside the workspace" \
+  "$(jq -r --arg t "$TMP/ws.tmp" '.sandbox.filesystem.allowWrite | index($t) != null' <<< "$POLICY")" "true"
+ok "...and NOT the shared temp root" \
+  "$(jq -r --arg t "$(cd "${TMPDIR:-/tmp}" && pwd -P)" \
+    '.sandbox.filesystem.allowWrite | index($t) != null' <<< "$POLICY")" "false"
 ok "...and nothing else" \
-  "$(jq -r --arg w "$TMP/ws" --arg t "$(cd "${TMPDIR:-/tmp}" && pwd -P)" \
+  "$(jq -r --arg w "$TMP/ws" --arg t "$TMP/ws.tmp" \
     '[.sandbox.filesystem.allowWrite[] | select(. != $w and . != $t)] | length' <<< "$POLICY")" "0"
+# A SIBLING of the clone, not a directory inside it: inside, it would show up as
+# untracked in the very tree the reviewer reads, and --working-tree mode copies
+# untracked files in by design.
+ok "scratch sits outside the clone" \
+  "$(case "$(sandbox_scratch_dir "$TMP/ws")" in "$TMP/ws"/*) echo inside ;; *) echo outside ;; esac)" "outside"
+
+echo "--- and the child is sent there, not at the shared root ---"
+# Granting a directory the child never uses would leave `mktemp -d` failing
+# exactly as it did before the grant existed, with probes reported as enabled.
+SCRATCH_ENV=$(sandbox_scratch_env "$TMP/ws")
+for v in TMPDIR TMP TEMP; do
+  ok "$v is the scratch directory" \
+    "$(printf '%s\n' "$SCRATCH_ENV" | grep -E "^${v}=" | cut -d= -f2-)" "$TMP/ws.tmp"
+done
 
 echo "--- credential stores are denied for reading ---"
 for p in .ssh .aws .gnupg .netrc .config/gh .claude/.credentials.json; do
