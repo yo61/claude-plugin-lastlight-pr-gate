@@ -49,7 +49,14 @@ readonly ASSETS=(
   workflows/prompts/review.md
   workflows/prompts/reviewer.md
   workflows/prompts/review-falsify.md
-  workflows/prompts/review-adjudicate.md
+  # 0.35.0 replaced the five-branch agent survey and the adjudicator with one
+  # units+sites path: facts -> seed -> unit survey -> sites -> reconcile ->
+  # post-review. review-adjudicate.md and the six survey-*.md branch prompts are
+  # gone from the package; these four are what the new path runs.
+  workflows/prompts/survey-unit.md
+  workflows/prompts/review-site.md
+  workflows/prompts/review-site-summary.md
+  workflows/prompts/review-select.md
 )
 
 die() {
