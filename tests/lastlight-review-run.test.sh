@@ -175,11 +175,16 @@ ok "...and grants no arbitrary Bash" \
 
 # ── the tool allowlist ───────────────────────────────────────────────────
 echo "--- review_tools: the reviewer must be able to CREATE its findings ---"
+# tools_for <workspace> [override] [review-root]
+#
+# The review root defaults to the workspace, which is what the sandboxed run
+# does. Passing it separately is how the unsandboxed case is reached, where the
+# workspace is empty and the reviewer runs in the repository itself.
 tools_for() {
   (
     unset LASTLIGHT_REVIEW_TOOLS
     [[ -n ${2:-} ]] && export LASTLIGHT_REVIEW_TOOLS="$2"
-    review_tools "$1"
+    review_tools "$1" "${3:-$1}"
     printf '%s\n' "${REVIEW_TOOLS[@]}"
   )
 }
@@ -213,6 +218,73 @@ ok "and no Write rule is emitted" \
   "$(tools_for '' | grep -c '^Write' || true)" "0"
 ok "sandboxed grants no bare Write either" \
   "$(tools_for /tmp/ws | grep -cx 'Write')" "0"
+
+# BOTH spellings of the one path, and that is not redundancy. A permission rule
+# binds the SPELLING it is written with, not the file it names: granted only the
+# relative form, a reviewer that reached for the absolute one stalled on a
+# permission prompt nothing headless can answer, and the run died with "the
+# reviewer wrote no findings.json" after the model call was already spent.
+#
+# Probed directly against the CLI, one `claude -p` per case, in a workspace
+# carrying this project's own sandbox policy: granted
+# `Edit(.lastlight/pr-review/findings.json)` and told to write the absolute
+# path, the write was refused and the file did not appear; with the absolute
+# rule added it was created. It cost two dead review runs on one branch, and the
+# failure reads as a flake, which is why it has a test and not a comment.
+#
+# The prefix is ONE extra slash, matching how read_deny_rules spells an absolute
+# path: `Edit(//tmp/ws/...)` for the root `/tmp/ws`. A single leading slash is
+# the RELATIVE form and matches nothing here.
+ok "sandboxed also grants the absolute spelling" \
+  "$(tools_for /tmp/ws | grep -cx 'Edit(//tmp/ws/.lastlight/pr-review/findings.json)')" "1"
+ok "unsandboxed grants the absolute spelling of the repository root" \
+  "$(tools_for '' '' /repo | grep -cx 'Edit(//repo/.lastlight/pr-review/findings.json)')" "1"
+ok "an override gets the absolute spelling appended too" \
+  "$(tools_for /tmp/ws 'Read,Grep' \
+    | grep -cx 'Edit(//tmp/ws/.lastlight/pr-review/findings.json)')" "1"
+
+# A relative review root cannot be spelled absolutely, and guessing would be
+# worse than omitting it: the rule would name a path the reviewer never writes.
+# `Edit(/` is the test for an absolute rule -- the relative rule starts
+# `Edit(.lastlight`, so it cannot be mistaken for one.
+ok "a relative review root adds no absolute rule" \
+  "$(tools_for '' '' some/where | grep -c 'Edit(/' || true)" "0"
+ok "...and an empty one adds none either" \
+  "$(tools_for '' | grep -c 'Edit(/' || true)" "0"
+
+# A review root reached through a symlink has TWO absolute spellings, and a rule
+# binds one of them. Every sandbox workspace on macOS sits behind such a link:
+# $TMPDIR is /var/folders/..., whose physical path is /private/var/folders/...
+# -- the same asymmetry this project's generated policy already shows, where
+# allowWrite carries the logical form.
+#
+# Left behind rather than removed, as the six temp directories above it are.
+LINKED=$(mktemp -d)
+mkdir -p "$LINKED/real"
+ln -s real "$LINKED/link"
+LINKED_PHYS=$(cd -P "$LINKED/link" && pwd -P)
+LINKED_DIR_PHYS=$(cd -P "$LINKED" && pwd -P)
+ok "a symlinked review root grants the spelling it was given" \
+  "$(tools_for "$LINKED/link" \
+    | grep -cx "Edit(/$LINKED/link/.lastlight/pr-review/findings.json)")" "1"
+ok "...and the physical spelling beside it" \
+  "$(tools_for "$LINKED/link" \
+    | grep -cx "Edit(/$LINKED_PHYS/.lastlight/pr-review/findings.json)")" "1"
+# An unlinked root resolves to itself, and a duplicate rule would be noise the
+# next reader has to account for.
+#
+# The physical root has to be CONSTRUCTED, not assumed. `mktemp -d` already
+# hands back a path behind a link on macOS, so `$LINKED/real` has two spellings
+# of its own; asserting one rule for it failed, correctly, and it was the test's
+# premise that was wrong rather than the code's behaviour. Resolving the PARENT
+# is what gives a root with only one spelling -- appending `/../real` to an
+# already-resolved path does not, because the `..` makes the given string differ
+# from what it resolves to, which is two spellings again.
+ok "a root that is already physical grants exactly one absolute rule" \
+  "$(tools_for "$LINKED_DIR_PHYS/real" | grep -c 'Edit(/' || true)" "1"
+# Still ONE file, whichever spelling: three rules, no fourth path.
+ok "no spelling escapes the findings file" \
+  "$(tools_for "$LINKED/link" | grep -c 'Edit(' || true)" "3"
 
 # The behaviour the extraction must not change.
 ok "unsandboxed stays read-only apart from those two" \
@@ -403,10 +475,13 @@ echo "--- the prompt and the write rule must name the same path ---"
 # want of a findings file -- on exactly the platforms with no sandbox.
 PROMPT=$(prompt /some/root origin/main deadbeef /some/assets)
 review_tools ''
-# Edit, not Write. A path rule is matched only as Edit(path) -- and an Edit
-# rule already covers every file-editing tool -- so a Write(path) rule beside
-# it is not redundant belt and braces, it is rejected, which this script treats
-# as a fatal under-equipped reviewer. It emitted one and tripped its own guard.
+# Edit, not Write. A path rule is matched only as Edit(path) -- and an Edit rule
+# already covers every file-editing tool -- so a Write(path) rule beside it is
+# not redundant belt and braces. The CLI does not reject it outright, which an
+# earlier note here claimed: it prints `Write(p) is not matched by file
+# permission checks` and carries on at exit 0. That sentence is what
+# tool_rule_rejected matches, so the warning is what this script treats as a
+# fatal under-equipped reviewer. It emitted one and tripped its own guard.
 ok "no Write rule is emitted" \
   "$(printf "%s\n" "${REVIEW_TOOLS[@]}" | grep -c "^Write(" || true)" "0"
 WRULE=$(printf "%s\n" "${REVIEW_TOOLS[@]}" | grep -m1 "^Edit(")
