@@ -220,7 +220,7 @@ main() {
     printf '  nothing confines a spawned process -- which is why Bash is withheld.\n' >&2
   fi
 
-  review_tools "$workspace"
+  review_tools "$workspace" "$review_root"
   local -a tools=("${REVIEW_TOOLS[@]}")
 
   printf 'Reviewing %s against %s\n  model: %s (independent session)\n' \
@@ -278,7 +278,7 @@ main() {
       || die "the findings file became a symlink while it was being copied out of the sandbox, so something was still running in there. Nothing was read through it. Re-run the review."
   fi
   [[ -f "$OUT_DIR/findings.json" ]] \
-    || die "the reviewer wrote no findings.json; see $OUT_DIR/reviewer.log"
+    || die "the reviewer wrote no findings.json; see ./$OUT_DIR/reviewer.log in this repository -- the isolated workspace printed above is already gone"
   jq -e . "$OUT_DIR/findings.json" > /dev/null 2>&1 \
     || die "the reviewer wrote invalid JSON to findings.json"
 
@@ -544,8 +544,31 @@ base_needed() {
   [[ -z $given && $working_tree -eq 0 ]]
 }
 
+# Every absolute spelling of the review root, one per line: the path as the
+# runner holds it, and its symlink-resolved form when that differs.
+#
+# TWO, because macOS reaches every sandbox workspace through a link -- $TMPDIR is
+# /var/folders/..., physically /private/var/folders/... -- and a rule written
+# with one spelling does not match a write of the other. The generated sandbox
+# policy shows the same asymmetry: allowWrite carries the logical form.
+#
+# A relative root yields nothing. Spelling it absolutely would resolve against
+# THIS process's cwd, which is not what the reviewer's writes resolve against,
+# so the rule would name a path nothing ever writes -- worse than no rule, which
+# at least fails where it can be seen.
+absolute_review_roots() {
+  local given=$1 physical
+  [[ -n $given && $given == /* ]] || return 0
+  printf '%s\n' "$given"
+  physical=$(cd -P "$given" 2> /dev/null && pwd -P) || return 0
+  if [[ -n $physical && $physical != "$given" ]]; then
+    printf '%s\n' "$physical"
+  fi
+  return 0
+}
+
 review_tools() {
-  local workspace=${1:-}
+  local workspace=${1:-} review_root=${2:-}
 
   REVIEW_TOOLS=("${DEFAULT_TOOLS[@]}")
   if [[ -n ${LASTLIGHT_REVIEW_TOOLS:-} ]]; then
@@ -568,34 +591,35 @@ review_tools() {
   # after any override so widening the tool list cannot accidentally drop the
   # reviewer's ability to record its own result.
   #
-  # BOTH verbs, and that is not belt-and-braces. The run deletes any stale
-  # findings.json before starting, so the file is guaranteed ABSENT -- and
-  # `Edit` cannot create a file. With `Edit` alone the reviewer stalls asking
-  # for permission and the run dies having already spent the model call. It
-  # only ever succeeded when the reviewer improvised with `Bash`, which the
-  # unsandboxed list does not grant at all, so the failure was a coin toss
-  # decided by which tool the reviewer happened to reach for. Scoped to the
-  # path either way: a bare `Write` would let it edit the code under review,
-  # including these scripts.
-  #
-  # RELATIVE, and main() has already cd'd to $root. A bare absolute path does
-  # NOT match (verified: the reviewer was then unable to write its own findings,
-  # which would have failed every run closed); the absolute form needs a `//`
-  # prefix. The relative form sidesteps that entirely.
-  #
-  # The PROMPT names the same relative path, and must keep doing so. It asked
-  # for an absolute one, which this rule does not match -- survivable while
-  # sandboxed, because Bash is granted there and the reviewer could write the
-  # file another way, and fatal in the unsandboxed fallback, where the tool list
-  # is the whole boundary and this rule is the only way through.
-  #
   # Edit, and ONLY Edit. A path rule is matched against file permission checks,
   # and those recognise Edit(path) alone -- an Edit rule covers every
-  # file-editing tool, Write included. A Write(path) rule beside it is not a
-  # belt-and-braces second grant: the CLI rejects it outright, which is the
-  # under-equipped-reviewer case this script treats as fatal, tripped by the
-  # script itself.
+  # file-editing tool, Write included, and CREATING an absent file is within it.
+  # The run deletes any stale findings.json first, so the file is always absent;
+  # probed directly, one `claude -p` granted `Edit(out.txt)` and nothing else
+  # created it and exited 0. A `Write(path)` rule beside this one is not a
+  # second grant. The CLI prints `Permission allow rule (--allowed-tools):
+  # Write(p) is not matched by file permission checks` and carries on at exit 0
+  # -- and that sentence is what tool_rule_rejected greps for, so emitting one
+  # makes this script kill its own run as an under-equipped reviewer.
+  #
+  # BOTH SPELLINGS of that one path, because a rule binds the SPELLING it was
+  # written with and not the file it names. The relative form is what the prompt
+  # asks for and what main()'s cd makes natural. A reviewer that expands it to
+  # the absolute path is asking to write a path no rule describes, so it stalls
+  # on a permission prompt nothing headless can answer and the run dies with
+  # "the reviewer wrote no findings.json" -- after the model call is spent.
+  # That killed two runs on one branch before it was understood, because it
+  # reads as a flake and a re-run is a coin toss.
+  #
+  # Granting the absolute form as well takes the choice away from the model. It
+  # widens nothing: every spelling names the same single file, and Bash --
+  # granted only when sandboxed -- was the only reason this ever appeared to
+  # work.
   REVIEW_TOOLS+=("Edit(${OUT_DIR}/findings.json)")
+  local spelling
+  while IFS= read -r spelling; do
+    REVIEW_TOOLS+=("Edit(/${spelling}/${OUT_DIR}/findings.json)")
+  done < <(absolute_review_roots "$review_root")
 }
 
 usage() {
