@@ -97,8 +97,8 @@ ok "--help does too" \
   "$(bash -c 'source "$1"; parse_options --help' _ "$RUN" 2>&1 | grep -c 'INDEPENDENT pass')" "1"
 ok "an unknown flag is rejected" "$(refused --bogus)" "lastlight-review-run: unknown option: --bogus"
 ok "...and so is a short one" "$(refused -x)" "lastlight-review-run: unknown option: -x"
-# macOS ships no `timeout`, and the runner uses it to bound both the reviewer
-# session and the containment probe. Undeclared, its absence was swallowed by
+# macOS ships no `timeout`, and the runner uses it to bound the containment
+# probe. Undeclared, its absence was swallowed by
 # the probe's `|| true` and the run died blaming the model for being
 # unavailable. gtimeout counts, since that is what Homebrew coreutils installs.
 # The thing CHECKED FOR has to be the thing RUN. The first version accepted
@@ -106,8 +106,10 @@ ok "...and so is a short one" "$(refused -x)" "lastlight-review-run: unknown opt
 # `env`, which resolves from PATH -- so a machine carrying only the g-prefixed
 # build passed the check and failed every call with 127, swallowed by the
 # probe's `|| true`. A declaration that made the misdiagnosis harder to find.
+# Once: the dependency check. The containment probe still runs under it; the
+# reviewer runs under await_deadline, which needs no external command.
 ok "the runner asks the resolver, not a name nobody runs" \
-  "$(grep -c 'sandbox_timeout_cmd' "$RUN")" "2"
+  "$(grep -c 'sandbox_timeout_cmd' "$RUN")" "1"
 ok "no call site execs a literal timeout" \
   "$(grep -cE '(^|[^_])timeout [0-9$]' "$RUN")" "0"
 # ...and whatever it names is a command that exists. NOT "it returns timeout":
@@ -475,6 +477,51 @@ ok "the timeout branch defers to it" \
   "$(grep -c 'timeout_message "' "$RUN" || true)" "1"
 ok "nothing else claims to know the log is empty" \
   "$(grep -c 'reviewer.log is empty' "$RUN" || true)" "0"
+
+# #23: an empty log read as "the session never started" while it was alive and
+# blocked on a `find /` two processes down. The tree is what settled it.
+printf '  101     1 S     15:00 claude -p review\n  102   101 R     14:59 find / -iname chart\n' \
+  > "$TRR/tree.txt"
+TM_=$(timeout_message "$TRR/empty.log" 900 "$TRR/tree.txt")
+ok "the live process tree is shown" "$(grep -c 'find / -iname chart' <<< "$TM_")" "1"
+ok "...and where it was saved" "$(grep -c "$TRR/tree.txt" <<< "$TM_")" "1"
+ok "an empty log is not read as a session that never started" \
+  "$(grep -c 'prints only its final result' <<< "$TM_")" "1"
+ok "...and re-running is not the advice" "$(grep -c 'Re-run it' <<< "$TM_")" "0"
+# shellcheck disable=SC2016  # the call site's literal text is what is matched
+ok "the timeout branch passes the tree" \
+  "$(grep -c 'timeout_message "$OUT_DIR/reviewer.log" "$TIMEOUT" "$OUT_DIR/reviewer.processes"' "$RUN")" "1"
+
+echo "--- await_deadline: bounds the reviewer and records what it was doing ---"
+# Unique arguments, so the liveness checks below cannot match anything else on
+# the machine.
+AD=$(mktemp -d)
+alive() { pgrep -f "sleep $1" > /dev/null && echo 1 || echo 0; }
+
+# Called directly, not in $(...): `wait` only reaps a child of the shell that
+# started it, and a command substitution is a different shell.
+bash -c 'exit 3' &
+rc=0
+await_deadline $! 5 "$AD/fast.txt" || rc=$?
+ok "a command that finishes in time keeps its status" "$rc" "3"
+ok "...and leaves no process record" "$([[ -e $AD/fast.txt ]] && echo yes || echo no)" "no"
+
+# Short-lived and detached from this suite's output, so a regressed kill costs
+# ~35s and a failed assertion rather than a hook hung on an open pipe.
+bash -c 'sleep 34.71 & sleep 34.72 & wait' > /dev/null 2>&1 &
+started=$SECONDS
+rc=0
+await_deadline $! 1 "$AD/slow.txt" || rc=$?
+ok "a command past its deadline reports a timeout" "$rc" "124"
+ok "...promptly" "$((SECONDS - started <= 10))" "1"
+ok "...recording its descendants while they were alive" \
+  "$(grep -cE ' sleep 34[.]7[12]$' "$AD/slow.txt" || true)" "2"
+# GNU timeout signals the whole process group, so a child of the reviewer died
+# with it. Replacing it must not leave the `find /` running after the run exits.
+ok "...and killing them" "$(alive 34.71)$(alive 34.72)" "00"
+# shellcheck disable=SC2046  # one pid per word is the point
+kill $(awk '{ print $1 }' "$AD/slow.txt") 2> /dev/null
+rm -rf "$AD"
 
 # The check was written with `rg`, which this script does not require. On a
 # machine without it the command exits 127, the `if` body is skipped, and an
