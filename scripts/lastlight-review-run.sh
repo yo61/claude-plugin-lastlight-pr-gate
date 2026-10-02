@@ -79,8 +79,8 @@ die() {
 main() {
   command -v claude > /dev/null 2>&1 || die "the claude CLI is required"
   command -v jq > /dev/null 2>&1 || die "jq is required"
-  # A timeout command bounds the reviewer session and the containment probe,
-  # and macOS ships neither spelling of it. Undeclared, its absence was
+  # A timeout command bounds the containment probe, and macOS ships neither
+  # spelling of it. Undeclared, its absence was
   # swallowed by the probe's `|| true` and the run died blaming the model for
   # being unavailable.
   #
@@ -160,7 +160,7 @@ main() {
   # A stale findings.json would bias an "independent" pass, and the skill is
   # explicit that a finding copied from another stage is one the adjudicator can
   # no longer cross-check. Start clean.
-  rm -f "$OUT_DIR/findings.json" "$OUT_DIR/attestation.json"
+  rm -f "$OUT_DIR/findings.json" "$OUT_DIR/attestation.json" "$OUT_DIR/reviewer.processes"
 
   # ── Isolation ────────────────────────────────────────────────────────────
   # Sandboxed by default. The reviewer works on a disposable clone under an OS
@@ -244,11 +244,22 @@ main() {
     while IFS= read -r kv; do env_args+=("$kv"); done < <(sandbox_scratch_env "$workspace")
   fi
 
-  local rc=0
-  (cd "$review_root" && env "${env_args[@]+"${env_args[@]}"}" "$(sandbox_timeout_cmd)" "$TIMEOUT" claude -p "$(prompt "$review_root" "$base" "$sha" "$assets_root")" \
+  local isolation=unsandboxed
+  [[ -n $workspace ]] && isolation=sandboxed
+
+  # In the background and bounded by await_deadline rather than `timeout`, so
+  # what the session was doing can be recorded before it is killed.
+  local rc=0 reviewer
+  (cd "$review_root" && exec env "${env_args[@]+"${env_args[@]}"}" claude -p "$(prompt "$review_root" "$base" "$sha" "$assets_root" "$isolation")" \
     --allowed-tools "${tools[@]}" \
     "${extra_args[@]}" \
-    --model "$MODEL") > "$OUT_DIR/reviewer.log" 2>&1 || rc=$?
+    --model "$MODEL") > "$OUT_DIR/reviewer.log" 2>&1 &
+  reviewer=$!
+  # A background job ignores SIGINT, so an interrupted run would leave the
+  # reviewer running with nobody waiting for it.
+  trap 'terminate_tree "$reviewer"; exit 130' INT TERM
+  await_deadline "$reviewer" "$TIMEOUT" "$OUT_DIR/reviewer.processes" || rc=$?
+  trap - INT TERM
   # A rule the CLI could not parse leaves the reviewer without a tool it needed,
   # and it carries on and produces a thinner review rather than failing. Treat
   # that as a hard error: a silently under-equipped reviewer is worse than none.
@@ -261,7 +272,7 @@ main() {
     die "the CLI rejected an allowed-tools rule, so the reviewer ran under-equipped; see $OUT_DIR/reviewer.log"
   fi
   if [[ $rc -eq 124 ]]; then
-    die "$(timeout_message "$OUT_DIR/reviewer.log" "$TIMEOUT")"
+    die "$(timeout_message "$OUT_DIR/reviewer.log" "$TIMEOUT" "$OUT_DIR/reviewer.processes")"
   fi
   if [[ $rc -ne 0 ]]; then
     [[ -s "$OUT_DIR/reviewer.log" ]] \
@@ -307,7 +318,7 @@ main() {
     --arg diff "$diff_hash" \
     --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg model "$MODEL" \
-    --arg iso "$([[ -n $workspace ]] && echo sandboxed || echo unsandboxed)" \
+    --arg iso "$isolation" \
     --arg mode "$([[ $WORKING_TREE -eq 1 ]] && echo working-tree || echo committed)" \
     '{sha:$sha, base:$base, diffHash:$diff, reviewedAt:$at, runner:"independent-session", model:$model, isolation:$iso, mode:$mode}' \
     > "$OUT_DIR/attestation.json"
@@ -522,15 +533,84 @@ tool_rule_rejected() {
 # before the kill. A run that timed out with a rejected tool rule in the log
 # was told to raise LASTLIGHT_REVIEW_TIMEOUT -- the wrong next step -- while
 # the reason sat in the file the message had just called empty.
+#
+# An empty log is not a session that never started either: `claude -p` prints
+# only its final result. #23 read as that for an hour while the reviewer sat
+# behind a `find /` two processes down -- so the live tree, when there is one,
+# is shown rather than a remedy guessed at.
 timeout_message() {
-  local log=$1 secs=$2
+  local log=$1 secs=$2 processes=${3:-}
   if [[ -s $log ]]; then
     printf 'the reviewer session was killed at the %ss timeout. %s holds what it wrote before the kill and may say why; read that before raising LASTLIGHT_REVIEW_TIMEOUT.' \
       "$secs" "$log"
   else
-    printf 'the reviewer session was killed at the %ss timeout, and %s is empty. Re-run it, or raise LASTLIGHT_REVIEW_TIMEOUT.' \
+    printf 'the reviewer session was killed at the %ss timeout, and %s is empty. That does not mean it never started: claude -p prints only its final result.' \
       "$secs" "$log"
   fi
+  if [[ -n $processes && -s $processes ]]; then
+    printf '\nStill running at the kill (pid ppid stat elapsed command), saved to %s:\n%s\nA command below the session is what it was waiting on, and raising LASTLIGHT_REVIEW_TIMEOUT will not finish one that never ends. MCP servers sit there for the whole session and are not that. With nothing else below it, the session was still working: a longer timeout is the remedy.' \
+      "$processes" "$(cat "$processes")"
+  elif [[ ! -s $log ]]; then
+    printf ' Re-run it, or raise LASTLIGHT_REVIEW_TIMEOUT.'
+  fi
+}
+
+# The process $1 and every descendant, one `ps` line each, commands cut to 200
+# characters: the reviewer's own line carries the whole prompt.
+process_tree() {
+  ps -A -o pid= -o ppid= -o stat= -o etime= -o command= 2> /dev/null | awk -v root="$1" '
+    { line[$1] = substr($0, 1, 200); parent[$1] = $2 }
+    END {
+      inside[root] = 1
+      do {
+        grew = 0
+        for (p in parent) if (!(p in inside) && (parent[p] in inside)) { inside[p] = 1; grew = 1 }
+      } while (grew)
+      for (p in inside) if (p in line) print line[p]
+    }' | sort -n
+}
+
+# TERM the process $1 and its descendants, then KILL whatever outlives 5s.
+#
+# The descendants are listed before anything is signalled: once the parent
+# dies they are reparented and no longer reachable by walking down from it.
+# GNU timeout reached them through the process group; a sandboxed child may
+# not share that group, so they are named one by one.
+#
+# $1 itself is always signalled, whatever `ps` says: the macOS sandbox refuses
+# `ps` outright, and an empty tree left the caller's `wait` blocked on a
+# session nothing had killed.
+terminate_tree() {
+  local -a pids=("$1") descendants
+  read -r -a descendants <<< "$(process_tree "$1" | awk '{ printf "%s ", $1 }')"
+  pids+=(${descendants[@]+"${descendants[@]}"})
+  kill -TERM "${pids[@]}" 2> /dev/null || true
+  local _
+  for _ in 1 2 3 4 5; do
+    kill -0 "${pids[@]}" 2> /dev/null || return 0
+    sleep 1
+  done
+  kill -KILL "${pids[@]}" 2> /dev/null || true
+}
+
+# Wait for the background job $1 for at most $2 seconds.
+#
+# On time, its exit status. Past the deadline, the live process tree is
+# written to $3, the tree is killed, and the status is 124, as from timeout(1).
+# `wait` only reaps a child of this shell, so this must not run in $(...).
+await_deadline() {
+  local pid=$1 secs=$2 processes=$3 deadline
+  deadline=$((SECONDS + secs))
+  while kill -0 "$pid" 2> /dev/null; do
+    if [[ $SECONDS -ge $deadline ]]; then
+      process_tree "$pid" > "$processes"
+      terminate_tree "$pid"
+      wait "$pid" 2> /dev/null || true
+      return 124
+    fi
+    sleep 1
+  done
+  wait "$pid"
 }
 
 working_tree_diff() {
@@ -687,8 +767,36 @@ parse_options() {
   fi
 }
 
+# What the reviewer cannot reach, said before it goes looking.
+#
+# #23: a HelmRelease diff sent a sandboxed reviewer after the chart with
+# `find /`, and the timeout killed it. The chart lived under $HOME, which the
+# policy denies. Staging the Helm cache was the alternative, and it is not
+# taken: repositories.yaml can hold repository credentials, and anything in the
+# workspace can leave through findings.json.
+environment_note() {
+  local root=$1 isolation=$2
+  printf 'What this environment cannot reach, so you do not spend the review finding out:\n'
+  if [[ $isolation == sandboxed ]]; then
+    printf '  - You run under an OS sandbox on a disposable copy of the repository. You\n'
+    printf '    may run commands, but any read under the home directory is refused, and\n'
+    printf '    the network reaches only: %s.\n' "$(sandbox_allowed_domains | paste -sd, - | sed 's/,/, /g')"
+  else
+    printf '  - This review is read-only: you cannot run commands, and any read under the\n'
+    printf '    home directory is refused.\n'
+  fi
+  cat << NOTE
+  - So nothing outside ${root} is available: package and tool caches,
+    a Helm chart or its repository cache, other checkouts, credentials. A
+    check that needs one -- rendering a chart, fetching a dependency -- cannot
+    succeed here, and do not search the filesystem for it. Say in the review
+    what could not be verified in this environment, and judge it from the diff
+    and the code instead.
+NOTE
+}
+
 prompt() {
-  local root=$1 base=$2 sha=$3 assets=$4
+  local root=$1 base=$2 sha=$3 assets=$4 isolation=$5
   cat << PROMPT
 You are reviewing a pull request. You did NOT write this code — review it as an
 independent reviewer would, and do not assume the author's reasoning was sound.
@@ -721,6 +829,8 @@ assumed. Report Critical and Important findings only.
 Do not post anything to GitHub. Do not modify any file other than
 findings.json. You are the only reviewer; there is no later stage to catch what
 you skip.
+
+$(environment_note "$root" "$isolation")
 PROMPT
 }
 
