@@ -548,7 +548,7 @@ timeout_message() {
       "$secs" "$log"
   fi
   if [[ -n $processes && -s $processes ]]; then
-    printf '\nStill running at the kill (pid ppid stat elapsed command), saved to %s:\n%s\nA long-lived command at the bottom of that tree is what the time went on; raising LASTLIGHT_REVIEW_TIMEOUT will not finish it.' \
+    printf '\nStill running at the kill (pid ppid stat elapsed command), saved to %s:\n%s\nA command below the session is what it was waiting on, and raising LASTLIGHT_REVIEW_TIMEOUT will not finish one that never ends. MCP servers sit there for the whole session and are not that. With nothing else below it, the session was still working: a longer timeout is the remedy.' \
       "$processes" "$(cat "$processes")"
   elif [[ ! -s $log ]]; then
     printf ' Re-run it, or raise LASTLIGHT_REVIEW_TIMEOUT.'
@@ -576,10 +576,14 @@ process_tree() {
 # dies they are reparented and no longer reachable by walking down from it.
 # GNU timeout reached them through the process group; a sandboxed child may
 # not share that group, so they are named one by one.
+#
+# $1 itself is always signalled, whatever `ps` says: the macOS sandbox refuses
+# `ps` outright, and an empty tree left the caller's `wait` blocked on a
+# session nothing had killed.
 terminate_tree() {
-  local -a pids
-  read -r -a pids <<< "$(process_tree "$1" | awk '{ printf "%s ", $1 }')"
-  [[ ${#pids[@]} -gt 0 ]] || return 0
+  local -a pids=("$1") descendants
+  read -r -a descendants <<< "$(process_tree "$1" | awk '{ printf "%s ", $1 }')"
+  pids+=(${descendants[@]+"${descendants[@]}"})
   kill -TERM "${pids[@]}" 2> /dev/null || true
   local _
   for _ in 1 2 3 4 5; do

@@ -98,9 +98,9 @@ ok "--help does too" \
 ok "an unknown flag is rejected" "$(refused --bogus)" "lastlight-review-run: unknown option: --bogus"
 ok "...and so is a short one" "$(refused -x)" "lastlight-review-run: unknown option: -x"
 # macOS ships no `timeout`, and the runner uses it to bound the containment
-# probe. Undeclared, its absence was swallowed by
-# the probe's `|| true` and the run died blaming the model for being
-# unavailable. gtimeout counts, since that is what Homebrew coreutils installs.
+# probe. Undeclared, its absence was swallowed by the probe's `|| true` and the
+# run died blaming the model for being unavailable. gtimeout counts, since that
+# is what Homebrew coreutils installs.
 # The thing CHECKED FOR has to be the thing RUN. The first version accepted
 # `gtimeout` while every call site executed the literal `timeout` through
 # `env`, which resolves from PATH -- so a machine carrying only the g-prefixed
@@ -521,6 +521,19 @@ ok "...recording its descendants while they were alive" \
 ok "...and killing them" "$(alive 34.71)$(alive 34.72)" "00"
 # shellcheck disable=SC2046  # one pid per word is the point
 kill $(awk '{ print $1 }' "$AD/slow.txt") 2> /dev/null
+
+# `ps` is refused inside the macOS sandbox. With no tree to walk, nothing was
+# signalled and the `wait` after the kill blocked for as long as the reviewer
+# lived -- the hang this exists to end, moved one function down.
+ok "the session is killed even when ps cannot list it" \
+  "$(
+    # shellcheck disable=SC2329  # shadows the `ps` that process_tree calls
+    ps() { return 1; }
+    sleep 34.73 > /dev/null 2>&1 &
+    t0=$SECONDS
+    await_deadline $! 1 "$AD/nops.txt"
+    echo "rc=$? prompt=$((SECONDS - t0 <= 10))"
+  )" "rc=124 prompt=1"
 rm -rf "$AD"
 
 # The check was written with `rg`, which this script does not require. On a
