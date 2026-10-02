@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.2](https://github.com/yo61/claude-plugin-lastlight-pr-gate/compare/v0.2.1...v0.2.2) (2026-10-02)
+
+
+### Bug Fixes
+
+* grant both spellings of the findings path ([6be8213](https://github.com/yo61/claude-plugin-lastlight-pr-gate/commit/6be8213a73591e75ec1801910d4b11f07973db8f))
+* grant both spellings of the findings path ([dcc89e8](https://github.com/yo61/claude-plugin-lastlight-pr-gate/commit/dcc89e8963bb0653ca9e3b19dcbc29697f6e6c95))
+* **review:** kill the session even when ps cannot list it ([0591518](https://github.com/yo61/claude-plugin-lastlight-pr-gate/commit/059151899eed70817e189650780860739b6c3527)), closes [#23](https://github.com/yo61/claude-plugin-lastlight-pr-gate/issues/23)
+* **review:** show what a timed-out reviewer was still running ([466d5be](https://github.com/yo61/claude-plugin-lastlight-pr-gate/commit/466d5be287b98864752e31d1825736a50aae9371)), closes [#23](https://github.com/yo61/claude-plugin-lastlight-pr-gate/issues/23)
+* **review:** tell the reviewer what it cannot reach, and diagnose timeouts ([fdad0ba](https://github.com/yo61/claude-plugin-lastlight-pr-gate/commit/fdad0babdeb4ea9b4a69aa5213d1afae6ee43373))
+* **review:** tell the reviewer what its environment cannot reach ([253d556](https://github.com/yo61/claude-plugin-lastlight-pr-gate/commit/253d5563931491e553389cd83864c9ab8be01d10)), closes [#23](https://github.com/yo61/claude-plugin-lastlight-pr-gate/issues/23)
+* track the units+sites prompts, drop the removed adjudicator ([09f3722](https://github.com/yo61/claude-plugin-lastlight-pr-gate/commit/09f3722aecd53198b266f5482ca6582fedcb8cd9))
+* track the units+sites prompts, drop the removed adjudicator ([b19b719](https://github.com/yo61/claude-plugin-lastlight-pr-gate/commit/b19b719ba8fd346c8020b601df54c230d59865fa))
+
 ## [0.2.1](https://github.com/yo61/claude-plugin-lastlight-pr-gate/compare/v0.2.0...v0.2.1) (2026-09-16)
 
 
