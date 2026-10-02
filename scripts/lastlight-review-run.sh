@@ -244,8 +244,11 @@ main() {
     while IFS= read -r kv; do env_args+=("$kv"); done < <(sandbox_scratch_env "$workspace")
   fi
 
+  local isolation=unsandboxed
+  [[ -n $workspace ]] && isolation=sandboxed
+
   local rc=0
-  (cd "$review_root" && env "${env_args[@]+"${env_args[@]}"}" "$(sandbox_timeout_cmd)" "$TIMEOUT" claude -p "$(prompt "$review_root" "$base" "$sha" "$assets_root")" \
+  (cd "$review_root" && env "${env_args[@]+"${env_args[@]}"}" "$(sandbox_timeout_cmd)" "$TIMEOUT" claude -p "$(prompt "$review_root" "$base" "$sha" "$assets_root" "$isolation")" \
     --allowed-tools "${tools[@]}" \
     "${extra_args[@]}" \
     --model "$MODEL") > "$OUT_DIR/reviewer.log" 2>&1 || rc=$?
@@ -307,7 +310,7 @@ main() {
     --arg diff "$diff_hash" \
     --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg model "$MODEL" \
-    --arg iso "$([[ -n $workspace ]] && echo sandboxed || echo unsandboxed)" \
+    --arg iso "$isolation" \
     --arg mode "$([[ $WORKING_TREE -eq 1 ]] && echo working-tree || echo committed)" \
     '{sha:$sha, base:$base, diffHash:$diff, reviewedAt:$at, runner:"independent-session", model:$model, isolation:$iso, mode:$mode}' \
     > "$OUT_DIR/attestation.json"
@@ -687,8 +690,36 @@ parse_options() {
   fi
 }
 
+# What the reviewer cannot reach, said before it goes looking.
+#
+# #23: a HelmRelease diff sent a sandboxed reviewer after the chart with
+# `find /`, and the timeout killed it. The chart lived under $HOME, which the
+# policy denies. Staging the Helm cache was the alternative, and it is not
+# taken: repositories.yaml can hold repository credentials, and anything in the
+# workspace can leave through findings.json.
+environment_note() {
+  local root=$1 isolation=$2
+  printf 'What this environment cannot reach, so you do not spend the review finding out:\n'
+  if [[ $isolation == sandboxed ]]; then
+    printf '  - You run under an OS sandbox on a disposable copy of the repository. You\n'
+    printf '    may run commands, but any read under the home directory is refused, and\n'
+    printf '    the network reaches only: %s.\n' "$(sandbox_allowed_domains | paste -sd, - | sed 's/,/, /g')"
+  else
+    printf '  - This review is read-only: you cannot run commands, and any read under the\n'
+    printf '    home directory is refused.\n'
+  fi
+  cat << NOTE
+  - So nothing outside ${root} is available: package and tool caches,
+    a Helm chart or its repository cache, other checkouts, credentials. A
+    check that needs one -- rendering a chart, fetching a dependency -- cannot
+    succeed here, and do not search the filesystem for it. Say in the review
+    what could not be verified in this environment, and judge it from the diff
+    and the code instead.
+NOTE
+}
+
 prompt() {
-  local root=$1 base=$2 sha=$3 assets=$4
+  local root=$1 base=$2 sha=$3 assets=$4 isolation=$5
   cat << PROMPT
 You are reviewing a pull request. You did NOT write this code — review it as an
 independent reviewer would, and do not assume the author's reasoning was sound.
@@ -721,6 +752,8 @@ assumed. Report Critical and Important findings only.
 Do not post anything to GitHub. Do not modify any file other than
 findings.json. You are the only reviewer; there is no later stage to catch what
 you skip.
+
+$(environment_note "$root" "$isolation")
 PROMPT
 }
 

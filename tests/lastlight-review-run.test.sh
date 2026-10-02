@@ -146,7 +146,7 @@ ok "a base ref alone is still fine" "$(parsed origin/main)" "wt=0 model=sonnet r
 
 # ── the prompt ───────────────────────────────────────────────────────────
 echo "--- prompt: points at the assets it is given ---"
-P=$(prompt /repo origin/main abc1234 /staged/assets)
+P=$(prompt /repo origin/main abc1234 /staged/assets sandboxed)
 # Staged rather than referenced where they live, because the reviewer's reads
 # are scoped to the workspace: pointing at the real location would deny it its
 # own instructions.
@@ -162,6 +162,32 @@ ok "the base is stated" "$(grep -c 'origin/main' <<< "$P")" "1"
 ok "it says the code is not the reviewer's" \
   "$(grep -c 'did NOT write this code' <<< "$P")" "1"
 ok "it forbids posting to GitHub" "$(grep -c 'Do not post anything to GitHub' <<< "$P")" "1"
+
+echo "--- prompt: says what the environment cannot reach ---"
+# #23: with $HOME unreadable, a HelmRelease diff sent the reviewer looking for
+# the chart with `find /` until the timeout killed it. A reviewer told up front
+# that the chart is out of reach has nothing to go looking for.
+PS_=$(LASTLIGHT_REVIEW_EGRESS='' prompt /repo origin/main abc1234 /assets sandboxed)
+PU_=$(prompt /repo origin/main abc1234 /assets unsandboxed)
+ok "sandboxed: home is named as unreadable" \
+  "$(grep -c 'home directory is refused' <<< "$PS_")" "1"
+ok "sandboxed: the reachable hosts are listed" \
+  "$(grep -c 'api.anthropic.com' <<< "$PS_")" "1"
+ok "sandboxed: an opted-in host is listed too" \
+  "$(LASTLIGHT_REVIEW_EGRESS=registry.npmjs.org prompt /r b s /a sandboxed | grep -c 'registry.npmjs.org')" "1"
+ok "sandboxed: a chart render is named as out of reach" \
+  "$(grep -c 'Helm chart' <<< "$PS_")" "1"
+ok "sandboxed: it is told not to search for what is missing" \
+  "$(grep -c 'do not search the filesystem' <<< "$PS_")" "1"
+ok "unsandboxed: it is told it cannot run commands" \
+  "$(grep -c 'cannot run commands' <<< "$PU_")" "1"
+ok "unsandboxed: it is told not to search either" \
+  "$(grep -c 'do not search the filesystem' <<< "$PU_")" "1"
+ok "unsandboxed: no host list, since nothing it runs reaches the network" \
+  "$(grep -c 'api.anthropic.com' <<< "$PU_")" "0"
+# shellcheck disable=SC2016  # the call site's literal text is what is matched
+ok "the run tells the prompt which posture it is in" \
+  "$(grep -c 'prompt "$review_root" "$base" "$sha" "$assets_root" "$isolation"' "$RUN")" "1"
 
 # ── defaults ─────────────────────────────────────────────────────────────
 echo "--- defaults ---"
@@ -473,7 +499,7 @@ echo "--- the prompt and the write rule must name the same path ---"
 # reviewer could write the file another way; in the unsandboxed fallback the
 # tool list IS the boundary, so the run spent the review and then failed for
 # want of a findings file -- on exactly the platforms with no sandbox.
-PROMPT=$(prompt /some/root origin/main deadbeef /some/assets)
+PROMPT=$(prompt /some/root origin/main deadbeef /some/assets sandboxed)
 review_tools ''
 # Edit, not Write. A path rule is matched only as Edit(path) -- and an Edit rule
 # already covers every file-editing tool -- so a Write(path) rule beside it is
