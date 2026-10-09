@@ -1,3 +1,8 @@
+# Dependabot keeps the pre-commit hooks and the workflows' action SHAs; Renovate
+# (renovate.json5) keeps the runner image, the tool versions CI installs and the
+# commitlint hook's config package. shellcheck is manual: .shellcheck-version pairs
+# its version with a checksum. Each pin has one owner.
+
 version: 2
 
 # Commit type decides whether an update ships. release-please treats every
@@ -18,6 +23,7 @@ updates:
     groups:
       hooks:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
 
   # GitHub Actions. Pins are SHAs with version comments; Dependabot
   # rewrites both. Majors stay outside the group so they arrive singly.

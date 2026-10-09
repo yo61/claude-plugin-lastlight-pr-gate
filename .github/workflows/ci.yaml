@@ -11,7 +11,7 @@ jobs:
   commitlint:
     name: Conventional Commits
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       pull-requests: read
     steps:
@@ -29,7 +29,7 @@ jobs:
 
   validate-plugin-json:
     name: plugin.json validation
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -64,7 +64,7 @@ jobs:
 
   lint:
     name: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -74,9 +74,12 @@ jobs:
       # pinned version avoids taking on another action dependency to SHA-pin
       # and keep updated.
       - name: Install shfmt
+        env:
+          # renovate: datasource=go depName=mvdan.cc/sh/v3
+          SHFMT_VERSION: v3.14.1
         run: |
           set -euo pipefail
-          go install mvdan.cc/sh/v3/cmd/shfmt@v3.14.0
+          go install "mvdan.cc/sh/v3/cmd/shfmt@${SHFMT_VERSION}"
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       # shellcheck IS preinstalled, and that was the problem: the runner image

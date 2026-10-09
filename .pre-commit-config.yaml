@@ -13,8 +13,10 @@ repos:
       - id: check-executables-have-shebangs
       - id: check-shebang-scripts-are-executable
 
-  - repo: https://github.com/rhysd/actionlint
-    rev: v1.7.12
+  # The maintained fork: upstream rhysd/actionlint stopped at 1.7.12, which rejects the
+  # ubuntu-26.04 runner label.
+  - repo: https://github.com/kjanat/actionlint
+    rev: v1.17.0
     hooks:
       - id: actionlint
 
@@ -128,4 +130,5 @@ repos:
       - id: commitlint
         stages: [commit-msg]
         additional_dependencies:
-          - "@commitlint/config-conventional@^21.2.3"
+          # Exact: Renovate's regex manager in renovate.json5 moves it; Dependabot moves rev.
+          - "@commitlint/config-conventional@21.2.3"

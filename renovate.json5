@@ -1,0 +1,53 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+
+  // Two bots update this repository, each owning different pins. Dependabot keeps the
+  // pre-commit hooks and the workflows' action SHAs (.github/dependabot.yaml). Renovate owns
+  // the runner image, the annotated *_VERSION values in the workflows, and the commitlint
+  // hook's config package. enabledManagers keeps it off everything Dependabot owns;
+  // github-actions runs only for runner images. Renovate runs from yo61/infrastructure's
+  // workflow, whose cron is the only schedule; do not add a `schedule`. shellcheck is manual:
+  // .shellcheck-version pairs its version with a checksum Renovate cannot rewrite.
+  extends: ["config:recommended", "customManagers:githubActionsVersions"],
+  enabledManagers: ["github-actions", "custom.regex"],
+
+  // Policy shared by every repository Renovate updates; keep the copies alike.
+  semanticCommits: "enabled",
+  dependencyDashboard: true,
+  minimumReleaseAge: "7 days",
+  minimumReleaseAgeBehaviour: "timestamp-optional",
+  prHourlyLimit: 0,
+  prConcurrentLimit: 10,
+  osvVulnerabilityAlerts: true,
+  vulnerabilityAlerts: {
+    semanticCommitType: "fix",
+    labels: ["security"],
+  },
+
+  packageRules: [
+    {
+      matchUpdateTypes: ["major"],
+      minimumReleaseAge: "14 days",
+    },
+    {
+      // Action SHAs are Dependabot's; only runs-on images are Renovate's.
+      matchManagers: ["github-actions"],
+      matchDatasources: ["!github-runners"],
+      enabled: false,
+    },
+    {
+      matchFileNames: [".github/workflows/**"],
+      semanticCommitScope: "ci",
+    },
+  ],
+
+  customManagers: [
+    {
+      // The commitlint hook's config package, in additional_dependencies.
+      customType: "regex",
+      managerFilePatterns: ["/^\\.pre-commit-config\\.yaml$/"],
+      matchStrings: ['"(?<depName>@commitlint/config-conventional)@(?<currentValue>[0-9.]+)"'],
+      datasourceTemplate: "npm",
+    },
+  ],
+}
