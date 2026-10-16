@@ -24,7 +24,7 @@ set -uo pipefail
 # `tests/readme-counts.sh` -- which invokes each suite with no environment --
 # broke in CI and in the pre-commit hook for anyone without an install.
 #
-# The override still works, and CI still passes one explicitly.
+# The override still works, and the prek hook, which CI runs, still passes one.
 # shellcheck source=tests/lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 clear_inherited_config

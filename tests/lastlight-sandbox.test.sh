@@ -19,8 +19,8 @@ set -uo pipefail
 SANDBOX="${SANDBOX:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)/lastlight-sandbox.sh}"
 # Resolve to absolute even though nothing here cd's before sourcing. Twice now a
 # relative path in a sibling suite has broken the prek hook while CI stayed
-# green, because prek passes a relative path and CI an absolute one. Cheap
-# insurance against the third time.
+# green, because prek passes a relative path and CI then passed an absolute
+# one. Cheap insurance against the third time.
 SANDBOX=$(cd "$(dirname "$SANDBOX")" && printf '%s/%s' "$PWD" "$(basename "$SANDBOX")")
 # shellcheck source=tests/lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"

@@ -16,7 +16,7 @@ set -uo pipefail
 # `tests/readme-counts.sh` -- which invokes each suite with no environment --
 # broke in CI and in the pre-commit hook for anyone without an install.
 #
-# The override still works, and CI still passes one explicitly.
+# The override still works, and the prek hook, which CI runs, still passes one.
 # shellcheck source=tests/lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 clear_inherited_config
@@ -24,9 +24,9 @@ RECORD="${RECORD:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)/lastl
 # Resolve to an ABSOLUTE path up front. Every case below cd's into a throwaway
 # fixture repo before invoking $RECORD, so a relative path stops resolving and
 # bash exits 127 -- which expect() reads as a refusal, silently turning the two
-# `expect pass` cases red. The prek hook passes a relative path while CI passes
-# an absolute one, so this broke the local hook on every commit while CI stayed
-# green. Identical to the bug already fixed in the sibling guard suite; fixing
+# `expect pass` cases red. The prek hook passes a relative path while CI then
+# passed an absolute one, so this broke the local hook on every commit while CI
+# stayed green. Identical to the bug already fixed in the sibling guard suite; fixing
 # it there and reintroducing it here is why the resolution belongs in a shared
 # place, not copied per-suite.
 RECORD=$(cd "$(dirname "$RECORD")" && printf '%s/%s' "$PWD" "$(basename "$RECORD")")
