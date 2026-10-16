@@ -1,0 +1,32 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+
+  // Dependabot keeps the action SHAs and pre-commit hooks (.github/dependabot.yaml).
+  // Renovate owns only the annotated *_VERSION values CI installs, so only custom.regex runs.
+  extends: ["config:recommended", "customManagers:githubActionsVersions"],
+  enabledManagers: ["custom.regex"],
+
+  // Policy shared by every repository Renovate updates; keep the copies alike.
+  semanticCommits: "enabled",
+  dependencyDashboard: true,
+  minimumReleaseAge: "7 days",
+  minimumReleaseAgeBehaviour: "timestamp-optional",
+  prHourlyLimit: 0,
+  prConcurrentLimit: 10,
+  osvVulnerabilityAlerts: true,
+  vulnerabilityAlerts: {
+    semanticCommitType: "fix",
+    labels: ["security"],
+  },
+
+  packageRules: [
+    {
+      matchUpdateTypes: ["major"],
+      minimumReleaseAge: "14 days",
+    },
+    {
+      matchFileNames: [".github/workflows/**"],
+      semanticCommitScope: "ci",
+    },
+  ],
+}
