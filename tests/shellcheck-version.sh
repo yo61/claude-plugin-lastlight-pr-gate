@@ -36,16 +36,15 @@ if [[ $have != "$SHELLCHECK_VERSION" ]]; then
   exit 1
 fi
 
-# ...and both invocations have to NAME the config, or shellcheck searches from
+# ...and the invocation has to NAME the config, or shellcheck searches from
 # each file upward and then $HOME -- which is how a personal ~/.shellcheckrc
 # decided what ran locally while CI saw something else. Same version, same
-# command, different settings.
-for caller in .github/workflows/ci.yaml .pre-commit-config.yaml; do
-  if ! grep -q -- '--rcfile=.shellcheckrc' "$SELF_DIR/../$caller"; then
-    printf '%s invokes shellcheck without --rcfile, so it reads whatever config\n' "$caller" >&2
-    printf 'the machine happens to provide. Name the file.\n' >&2
-    exit 1
-  fi
-done
+# command, different settings. CI runs the prek hook too, so the hook is the
+# one invocation.
+if ! grep -q -- '--rcfile=.shellcheckrc' "$SELF_DIR/../.pre-commit-config.yaml"; then
+  printf '.pre-commit-config.yaml invokes shellcheck without --rcfile, so it reads\n' >&2
+  printf 'whatever config the machine happens to provide. Name the file.\n' >&2
+  exit 1
+fi
 
-printf 'shellcheck %s matches the pinned version, and both callers name the config\n' "$have"
+printf 'shellcheck %s matches the pinned version, and the hook names the config\n' "$have"
