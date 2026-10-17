@@ -115,5 +115,8 @@ jobs:
         env:
           # renovate: datasource=github-releases depName=j178/prek extractVersion=^v(?<version>.+)$
           PREK_VERSION: 0.5.5
+          # jactionlint's online rules (yo61/global decisions/2026-10-17-retire-zizmor.md).
+          JACTIONLINT_ONLINE: 1
+          GITHUB_TOKEN: ${{ github.token }}
         with:
           prek-version: ${{ env.PREK_VERSION }}

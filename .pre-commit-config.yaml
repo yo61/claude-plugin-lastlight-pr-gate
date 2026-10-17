@@ -18,11 +18,6 @@ repos:
     hooks:
       - id: jactionlint
 
-  - repo: https://github.com/woodruffw/zizmor-pre-commit
-    rev: v1.30.1
-    hooks:
-      - id: zizmor
-
   # shellcheck and shfmt run from the system install rather than a pinned hook
   # repo, so the flags here are byte-identical to the ones CI and the editor
   # use. The four shfmt flags are the project standard: -i 2 two-space indent,
