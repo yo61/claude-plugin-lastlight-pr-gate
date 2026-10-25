@@ -220,6 +220,15 @@ from an ordinary checkout; it holds paths, not secrets.
 Entries are pruned when the workspace they name is gone, so nothing has to be
 cleaned up by hand.
 
+## Reviewing a dependency update
+
+```bash
+scripts/dependency-review-run.sh [--model <m>] <owner/repo> <pr> <head-sha> <out-dir>
+```
+
+Writes `<out-dir>/verdict.json` (`pass`, `fail` or `needs-human`, bound to the head SHA)
+and `<out-dir>/attestation.json`, reviewing under the same sandbox as the PR review.
+
 ## What is and is not gated
 
 The line is **new SHAs delivered to origin**. `docs/gate-contract.md` states
@@ -310,6 +319,7 @@ for t in tests/*.test.sh; do bash "$t"; done
 
 | suite | cases | covers |
 |---|---|---|
+| `dependency-review-run.test.sh` | 45 | argument checks, the head-SHA binding, the verdict contract, the prompt, the attestation |
 | `lastlight-review-gate.test.sh` | 245 | what is gated, what is allowed through |
 | `lastlight-review-record.test.sh` | 16 | the pass bar and the attestation binding |
 | `lastlight-review-run.test.sh` | 133 | flag parsing, the prompt, the defaults, the tool allowlist and the spellings it grants, and what may cross back out of the sandbox |

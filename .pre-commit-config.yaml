@@ -98,6 +98,13 @@ repos:
         pass_filenames: false
         files: '^(scripts|tests)/.*\.sh$'
 
+      - id: dependency-review-tests
+        name: dependency review suite
+        entry: env DEP=./scripts/dependency-review-run.sh bash tests/dependency-review-run.test.sh
+        language: system
+        pass_filenames: false
+        files: '^(scripts|tests)/.*\.sh$'
+
       - id: readme-counts
         name: README test counts match the suites
         entry: bash tests/readme-counts.sh
