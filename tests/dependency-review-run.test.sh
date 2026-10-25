@@ -117,14 +117,34 @@ ok "offers needs-human" "$(has "needs-human")" "yes"
 echo "--- write_attestation ---"
 printf 'diff' > "$SCRATCH/pr.diff"
 printf 'body' > "$SCRATCH/pr-body.md"
+ok "input_hash matches git's stdin hash" "$(input_hash "$SCRATCH/pr.diff")" \
+  "$(git hash-object --stdin < "$SCRATCH/pr.diff")"
 write_attestation "$SCRATCH/att.json" yo61/demo 12 "$SHA" "$OTHER" \
-  "$SCRATCH/pr.diff" "$SCRATCH/pr-body.md" sonnet
+  "$(input_hash "$SCRATCH/pr.diff")" "$(input_hash "$SCRATCH/pr-body.md")" sonnet
 ok "binds the SHA" "$(jq -r .sha "$SCRATCH/att.json")" "$SHA"
 ok "binds the base" "$(jq -r .base "$SCRATCH/att.json")" "$OTHER"
-ok "hashes the diff" "$(jq -r .diffHash "$SCRATCH/att.json")" \
+ok "records the diff hash it was given" "$(jq -r .diffHash "$SCRATCH/att.json")" \
   "$(git hash-object --stdin < "$SCRATCH/pr.diff")"
-ok "hashes the body" "$(jq -r .bodyHash "$SCRATCH/att.json")" \
+ok "records the body hash it was given" "$(jq -r .bodyHash "$SCRATCH/att.json")" \
   "$(git hash-object --stdin < "$SCRATCH/pr-body.md")"
+
+echo "--- inputs are hashed before the reviewer can touch them ---"
+MAIN=$(declare -f main)
+before_reviewer() {
+  local head=${MAIN%%run_reviewer*}
+  [[ $head != "$MAIN" && $head == *"$1"* ]] && echo yes || echo no
+}
+# shellcheck disable=SC2016  # matched against main's source text, so it must not expand
+ok "the diff is hashed before run_reviewer" "$(before_reviewer 'input_hash "$ws/$INPUT_DIR/pr.diff"')" "yes"
+# shellcheck disable=SC2016  # matched against main's source text, so it must not expand
+ok "the body is hashed before run_reviewer" \
+  "$(before_reviewer 'input_hash "$ws/$INPUT_DIR/pr-body.md"')" "yes"
+# shellcheck disable=SC2016  # matched against main's source text, so it must not expand
+ok "nothing re-reads the workspace inputs after the review" \
+  "$(
+    after=${MAIN#*run_reviewer}
+    [[ $after == *'$INPUT_DIR'* ]] && echo yes || echo no
+  )" "no"
 ok "records the posture" "$(jq -r .isolation "$SCRATCH/att.json")" "sandboxed"
 ok "records the runner" "$(jq -r .runner "$SCRATCH/att.json")" "dependency-review"
 

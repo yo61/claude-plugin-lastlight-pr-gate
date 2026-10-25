@@ -108,12 +108,15 @@ Write exactly one file, ${OUT_DIR}/findings.json, containing only this JSON obje
 PROMPT
 }
 
+input_hash() {
+  git hash-object --stdin < "$1"
+}
+
 write_attestation() {
-  local dest=$1 repo=$2 pr=$3 sha=$4 base=$5 diff=$6 body=$7 model=$8
+  local dest=$1 repo=$2 pr=$3 sha=$4 base=$5 diff_hash=$6 body_hash=$7 model=$8
   jq -n \
     --arg repo "$repo" --argjson pr "$pr" --arg sha "$sha" --arg base "$base" \
-    --arg diff "$(git hash-object --stdin < "$diff")" \
-    --arg body "$(git hash-object --stdin < "$body")" \
+    --arg diff "$diff_hash" --arg body "$body_hash" \
     --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg model "$model" \
     '{repo:$repo, pr:$pr, sha:$sha, base:$base, diffHash:$diff, bodyHash:$body,
       reviewedAt:$at, runner:"dependency-review", model:$model, isolation:"sandboxed"}' \
@@ -207,7 +210,7 @@ main() {
   mkdir -p "$out"
   rm -f "$out/verdict.json" "$out/attestation.json"
 
-  local stage meta ws settings base
+  local stage meta ws settings base diff_hash body_hash
   stage=$(mktemp -d)
   # shellcheck disable=SC2064  # expand now, not at trap time
   trap "rm -rf '$stage'" EXIT
@@ -223,6 +226,8 @@ main() {
   trap "rm -rf '$stage' '$(dirname "$ws")'" EXIT
   sandbox_clear_runner_paths "$ws"
   base=$(stage_inputs "$stage/source" "$ws" "$meta" "$sha")
+  diff_hash=$(input_hash "$ws/$INPUT_DIR/pr.diff")
+  body_hash=$(input_hash "$ws/$INPUT_DIR/pr-body.md")
   settings=$(confine_workspace "$ws")
 
   printf 'Reviewing %s#%s at %s\n  model: %s (independent, sandboxed)\n' \
@@ -231,7 +236,7 @@ main() {
     "$out/reviewer.log"
   collect_verdict "$ws" "$out" "$sha"
   write_attestation "$out/attestation.json" "$repo" "$pr" "$sha" "$base" \
-    "$ws/$INPUT_DIR/pr.diff" "$ws/$INPUT_DIR/pr-body.md" "$MODEL"
+    "$diff_hash" "$body_hash" "$MODEL"
   printf 'Verdict: %s\n' "$(jq -r .verdict "$out/verdict.json")" >&2
 }
 
