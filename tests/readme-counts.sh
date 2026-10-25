@@ -49,7 +49,7 @@ while read -r suite want; do
     printf 'README says %s for tests/%s, but it prints %s\n' "$want" "$suite" "$got" >&2
     fail=1
   fi
-done < <(sed -n 's/^| `\(lastlight-[a-z-]*\.test\.sh\)` | \([0-9][0-9]*\) |.*/\1 \2/p' README.md)
+done < <(sed -n 's/^| `\([a-z-]*\.test\.sh\)` | \([0-9][0-9]*\) |.*/\1 \2/p' README.md)
 
 # A table this cannot find is a table it cannot police, and silence would read
 # as agreement.
@@ -57,6 +57,13 @@ if [[ $found -eq 0 ]]; then
   printf 'no test-count rows found in README.md -- has the table moved?\n' >&2
   exit 1
 fi
+
+for path in tests/*.test.sh; do
+  if ! grep -qF "| \`${path#tests/}\` | " README.md; then
+    printf 'tests/%s has no row in the README test table\n' "${path#tests/}" >&2
+    fail=1
+  fi
+done
 
 [[ $fail -eq 0 ]] || exit 1
 echo "README test counts match the suites"
