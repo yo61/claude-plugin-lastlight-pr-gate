@@ -60,4 +60,8 @@ clear_inherited_config() {
   while IFS= read -r var; do
     [[ -n $var ]] && unset "$var"
   done < <(env | awk -F= '/^GIT_CONFIG_[A-Za-z0-9_]*=/ { print $1 }')
+  # A commit from a linked worktree exports an absolute GIT_INDEX_FILE that every temp repo would share.
+  while IFS= read -r var; do
+    [[ -n $var ]] && unset "$var"
+  done < <(git rev-parse --local-env-vars)
 }
