@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.0](https://github.com/yo61/claude-plugin-lastlight-pr-gate/compare/v0.2.2...v0.3.0) (2026-10-25)
+
+
+### Features
+
+* add dependency-review-run.sh for dependency-update PRs ([4e0ff8d](https://github.com/yo61/claude-plugin-lastlight-pr-gate/commit/4e0ff8d4e89717b9c41b2a32871f96d396bf0c6f))
+
+
+### Bug Fixes
+
+* **tests:** clear git's repository env vars the suites must not inherit ([4e0ff8d](https://github.com/yo61/claude-plugin-lastlight-pr-gate/commit/4e0ff8d4e89717b9c41b2a32871f96d396bf0c6f))
+* **tests:** make readme-counts police every suite, not only lastlight-* ([4e0ff8d](https://github.com/yo61/claude-plugin-lastlight-pr-gate/commit/4e0ff8d4e89717b9c41b2a32871f96d396bf0c6f))
+
 ## [0.2.2](https://github.com/yo61/claude-plugin-lastlight-pr-gate/compare/v0.2.1...v0.2.2) (2026-10-02)
 
 
