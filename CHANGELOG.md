@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/yo61/claude-plugin-lastlight-pr-gate/compare/v0.3.0...v0.4.0) (2026-10-28)
+
+
+### Features
+
+* let dependency reviews read evidence and name post-merge checks ([#41](https://github.com/yo61/claude-plugin-lastlight-pr-gate/issues/41)) ([02c14ea](https://github.com/yo61/claude-plugin-lastlight-pr-gate/commit/02c14ea8aac1dde9daa333ae8b568cbf371a3e24))
+
 ## [0.3.0](https://github.com/yo61/claude-plugin-lastlight-pr-gate/compare/v0.2.2...v0.3.0) (2026-10-25)
 
 
