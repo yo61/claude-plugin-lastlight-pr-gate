@@ -61,6 +61,18 @@ ok "--model before positionals" "$(parsed --model opus a/b 1 "$SHA" out)" "model
 ok "--model after positionals" "$(parsed a/b 1 "$SHA" out --model opus)" "model=opus rest=a/b 1 $SHA out"
 ok "an unknown flag is refused" \
   "$( (parse_dep_options --bogus a/b > /dev/null 2>&1) && echo accepted || echo refused)" "refused"
+evidence_opt() {
+  (
+    parse_dep_options "$@" > /dev/null 2>&1
+    printf 'evidence=%s rest=%s' "$EVIDENCE" "${REST[*]}"
+  )
+}
+ok "no --evidence means none" "$(evidence_opt a/b 1 "$SHA" out)" "evidence= rest=a/b 1 $SHA out"
+ok "--evidence takes a directory" "$(evidence_opt --evidence /ev a/b 1 "$SHA" out)" \
+  "evidence=/ev rest=a/b 1 $SHA out"
+ok "--evidence without a value is refused" \
+  "$( (parse_dep_options a/b --evidence > /dev/null 2>&1) && echo accepted || echo refused)" \
+  "refused"
 
 # ── the head SHA must not move under the review ──────────────────────────
 echo "--- head_matches ---"
@@ -77,7 +89,7 @@ echo "--- verdict_valid ---"
 verdict() {
   jq -n --arg v "$1" --arg sha "$2" \
     '{verdict:$v, headSha:$sha, package:"tempo", from:"3.2.0", to:"3.2.1",
-      updateType:"patch", summary:"s", reasons:["r"], humanChecks:[]}'
+      updateType:"patch", summary:"s", reasons:["r"], humanChecks:[], postMergeChecks:[]}'
 }
 checked() { (verdict_valid "$1" "$SHA" > /dev/null 2>&1) && echo valid || echo invalid; }
 
@@ -99,6 +111,69 @@ jq '.humanChecks = ["read the release notes"]' "$SCRATCH/v1.json" > "$SCRATCH/v8
 ok "a pass that still lists human checks" "$(checked "$SCRATCH/v8.json")" "invalid"
 printf 'not json' > "$SCRATCH/v9.json"
 ok "not JSON at all" "$(checked "$SCRATCH/v9.json")" "invalid"
+jq '.postMergeChecks = ["Loki healthy at its idle baseline"]' "$SCRATCH/v1.json" \
+  > "$SCRATCH/v10.json"
+ok "a pass may carry post-merge checks" "$(checked "$SCRATCH/v10.json")" "valid"
+jq 'del(.postMergeChecks)' "$SCRATCH/v1.json" > "$SCRATCH/v11.json"
+ok "postMergeChecks missing" "$(checked "$SCRATCH/v11.json")" "invalid"
+jq '.postMergeChecks = "none"' "$SCRATCH/v1.json" > "$SCRATCH/v12.json"
+ok "postMergeChecks not an array" "$(checked "$SCRATCH/v12.json")" "invalid"
+
+# ── evidence: what the caller may hand the reviewer ──────────────────────
+echo "--- evidence_valid ---"
+ev_ok() { (evidence_valid "$1" > /dev/null 2>&1) && echo valid || echo invalid; }
+EV=$SCRATCH/ev
+mkdir -p "$EV"
+ok "an empty evidence directory" "$(ev_ok "$EV")" "valid"
+printf 'checks' > "$EV/ci-checks.json"
+printf 'notes' > "$EV/release-notes-v1.2.3.md"
+ok "plain files with plain names" "$(ev_ok "$EV")" "valid"
+ok "a missing directory" "$(ev_ok "$SCRATCH/nope")" "invalid"
+ln -s "$EV" "$SCRATCH/ev-link"
+ok "a symlinked directory" "$(ev_ok "$SCRATCH/ev-link")" "invalid"
+for case in symlink subdir dotfile badname big many; do
+  d=$SCRATCH/ev-$case
+  mkdir -p "$d"
+  printf 'x' > "$d/ok.txt"
+done
+ln -s /etc/hosts "$SCRATCH/ev-symlink/hosts"
+mkdir "$SCRATCH/ev-subdir/nested"
+printf 'x' > "$SCRATCH/ev-dotfile/.hidden"
+printf 'x' > "$SCRATCH/ev-badname/has space.txt"
+head -c $((EVIDENCE_MAX_FILE_BYTES + 1)) /dev/zero > "$SCRATCH/ev-big/huge.log"
+for i in $(seq 1 $((EVIDENCE_MAX_FILES + 1))); do printf 'x' > "$SCRATCH/ev-many/f$i.txt"; done
+ok "a symlinked file" "$(ev_ok "$SCRATCH/ev-symlink")" "invalid"
+ok "a subdirectory" "$(ev_ok "$SCRATCH/ev-subdir")" "invalid"
+ok "a dotfile" "$(ev_ok "$SCRATCH/ev-dotfile")" "invalid"
+ok "a name with a space" "$(ev_ok "$SCRATCH/ev-badname")" "invalid"
+ok "a file over the size limit" "$(ev_ok "$SCRATCH/ev-big")" "invalid"
+ok "more files than allowed" "$(ev_ok "$SCRATCH/ev-many")" "invalid"
+
+echo "--- stage_evidence and evidence_hash ---"
+WS=$SCRATCH/ws
+mkdir -p "$WS"
+stage_evidence "$EV" "$WS"
+ok "stages every evidence file" "$(find "$WS/$EVIDENCE_DIR" -type f | wc -l | tr -d ' ')" "2"
+ok "stages contents unchanged" "$(cat "$WS/$EVIDENCE_DIR/ci-checks.json")" "checks"
+stage_evidence "" "$SCRATCH/ws-none"
+ok "no evidence stages nothing" "$([[ -e $SCRATCH/ws-none ]] && echo staged || echo none)" "none"
+H1=$(evidence_hash "$WS/$EVIDENCE_DIR")
+ok "hashes the staged evidence" "$([[ $H1 =~ ^[0-9a-f]{40}$ ]] && echo hashed || echo no)" "hashed"
+ok "no evidence has no hash" "$(evidence_hash "$SCRATCH/ws-none/$EVIDENCE_DIR")" ""
+mkdir -p "$SCRATCH/ws-empty/$EVIDENCE_DIR"
+# The script runs under errexit and pipefail, which this harness drops; check in one that keeps them.
+strict() { (bash -c "set -o errexit -o nounset -o pipefail; source '$DEP'; $1" > /dev/null 2>&1) && echo ok || echo died; }
+ok "an empty evidence directory hashes under errexit" \
+  "$(strict "h=\$(evidence_hash '$SCRATCH/ws-empty/$EVIDENCE_DIR')")" "ok"
+ok "an empty evidence directory lists under errexit" \
+  "$(strict "l=\$(evidence_listing '$SCRATCH/ws-empty')")" "ok"
+printf 'tampered' > "$WS/$EVIDENCE_DIR/ci-checks.json"
+ok "the hash changes with the content" \
+  "$([[ $(evidence_hash "$WS/$EVIDENCE_DIR") != "$H1" ]] && echo changed || echo same)" "changed"
+H2=$(evidence_hash "$WS/$EVIDENCE_DIR")
+mv "$WS/$EVIDENCE_DIR/ci-checks.json" "$WS/$EVIDENCE_DIR/renamed.json"
+ok "the hash changes with a file name alone" \
+  "$([[ $(evidence_hash "$WS/$EVIDENCE_DIR") != "$H2" ]] && echo changed || echo same)" "changed"
 
 # ── the prompt ───────────────────────────────────────────────────────────
 echo "--- dependency_prompt ---"
@@ -112,6 +187,11 @@ ok "points at the staged diff" "$(has "$INPUT_DIR/pr.diff")" "yes"
 ok "asks for the Renovate config notes" "$(has "prBodyNotes")" "yes"
 ok "names the output file" "$(has "$OUT_DIR/findings.json")" "yes"
 ok "offers needs-human" "$(has "needs-human")" "yes"
+ok "asks for post-merge checks" "$(has "postMergeChecks")" "yes"
+ok "says when there is no evidence" "$(has "No evidence was gathered")" "yes"
+P=$(dependency_prompt /ws "$SHA" yo61/demo 12 "  $EVIDENCE_DIR/ci-checks.json")
+ok "lists the evidence it was given" "$(has "$EVIDENCE_DIR/ci-checks.json")" "yes"
+ok "marks the evidence untrusted" "$(has "also UNTRUSTED")" "yes"
 
 # ── attestation ──────────────────────────────────────────────────────────
 echo "--- write_attestation ---"
@@ -127,6 +207,9 @@ ok "records the diff hash it was given" "$(jq -r .diffHash "$SCRATCH/att.json")"
   "$(git hash-object --stdin < "$SCRATCH/pr.diff")"
 ok "records the body hash it was given" "$(jq -r .bodyHash "$SCRATCH/att.json")" \
   "$(git hash-object --stdin < "$SCRATCH/pr-body.md")"
+ok "no evidence records a null evidence hash" "$(jq -r .evidenceHash "$SCRATCH/att.json")" "null"
+write_attestation "$SCRATCH/att-ev.json" yo61/demo 12 "$SHA" "$OTHER" d b sonnet "$H1"
+ok "records the evidence hash it was given" "$(jq -r .evidenceHash "$SCRATCH/att-ev.json")" "$H1"
 
 echo "--- inputs are hashed before the reviewer can touch them ---"
 MAIN=$(declare -f main)
@@ -139,6 +222,15 @@ ok "the diff is hashed before run_reviewer" "$(before_reviewer 'input_hash "$ws/
 # shellcheck disable=SC2016  # matched against main's source text, so it must not expand
 ok "the body is hashed before run_reviewer" \
   "$(before_reviewer 'input_hash "$ws/$INPUT_DIR/pr-body.md"')" "yes"
+# shellcheck disable=SC2016  # matched against main's source text, so it must not expand
+ok "the evidence is hashed before run_reviewer" \
+  "$(before_reviewer 'evidence_hash "$ws/$EVIDENCE_DIR"')" "yes"
+# shellcheck disable=SC2016  # matched against main's source text, so it must not expand
+ok "the evidence is validated before anything is staged" \
+  "$(
+    head=${MAIN%%stage_evidence*}
+    [[ $head == *'evidence_valid "$EVIDENCE"'* ]] && echo yes || echo no
+  )" "yes"
 # shellcheck disable=SC2016  # matched against main's source text, so it must not expand
 ok "nothing re-reads the workspace inputs after the review" \
   "$(
