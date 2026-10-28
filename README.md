@@ -223,11 +223,22 @@ cleaned up by hand.
 ## Reviewing a dependency update
 
 ```bash
-scripts/dependency-review-run.sh [--model <m>] <owner/repo> <pr> <head-sha> <out-dir>
+scripts/dependency-review-run.sh [--model <m>] [--evidence <dir>] \
+  <owner/repo> <pr> <head-sha> <out-dir>
 ```
 
 Writes `<out-dir>/verdict.json` (`pass`, `fail` or `needs-human`, bound to the head SHA)
 and `<out-dir>/attestation.json`, reviewing under the same sandbox as the PR review.
+
+`--evidence` hands the reviewer files gathered outside the sandbox, which has no network:
+CI results and logs, upstream release notes, the upstream comparison. The directory may
+hold only plain files with plain names: at most 50 files, 256 KiB each and 2 MiB in all.
+They are staged untrusted beside the PR body, and their names and contents are hashed
+into the attestation's `evidenceHash` before the reviewer runs.
+
+The verdict sorts the checks it cannot make. `humanChecks` lists pre-merge checks, and a
+`pass` must leave it empty. `postMergeChecks` lists checks that only exist once the change
+is running, such as a rollout or a service's health; a `pass` may carry these.
 
 ## What is and is not gated
 
@@ -319,7 +330,7 @@ for t in tests/*.test.sh; do bash "$t"; done
 
 | suite | cases | covers |
 |---|---|---|
-| `dependency-review-run.test.sh` | 45 | argument checks, the head-SHA binding, the verdict contract, the prompt, the attestation |
+| `dependency-review-run.test.sh` | 78 | argument checks, the head-SHA binding, the verdict contract, the evidence contract, the prompt, the attestation |
 | `lastlight-review-gate.test.sh` | 245 | what is gated, what is allowed through |
 | `lastlight-review-record.test.sh` | 16 | the pass bar and the attestation binding |
 | `lastlight-review-run.test.sh` | 133 | flag parsing, the prompt, the defaults, the tool allowlist and the spellings it grants, and what may cross back out of the sandbox |
