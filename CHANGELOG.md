@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/yo61/claude-plugin-lastlight-pr-gate/compare/v0.4.0...v0.4.1) (2026-11-03)
+
+
+### Bug Fixes
+
+* set shell options before dependency-review-run.sh sources its library ([#45](https://github.com/yo61/claude-plugin-lastlight-pr-gate/issues/45)) ([dea839a](https://github.com/yo61/claude-plugin-lastlight-pr-gate/commit/dea839a55836e1aa197463f83edc438150aa41ad))
+
 ## [0.4.0](https://github.com/yo61/claude-plugin-lastlight-pr-gate/compare/v0.3.0...v0.4.0) (2026-10-28)
 
 
