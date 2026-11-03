@@ -5,12 +5,12 @@ if [[ ${DEBUG-} =~ ^(1|yes|true)$ ]]; then
   set -o xtrace # Trace the execution of the script (debug)
 fi
 
-# shellcheck source=scripts/lastlight-review-run.sh
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lastlight-review-run.sh"
-
 set -o errexit  # Exit on most errors (see the manual)
 set -o nounset  # Disallow expansion of unset variables
 set -o pipefail # Use last non-zero exit code in a pipeline
+
+# shellcheck source=scripts/lastlight-review-run.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lastlight-review-run.sh"
 
 readonly INPUT_DIR=.lastlight/dependency-review
 readonly VERDICTS='["pass","fail","needs-human"]'

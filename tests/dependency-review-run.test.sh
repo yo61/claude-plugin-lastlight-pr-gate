@@ -244,5 +244,13 @@ ok "records the runner" "$(jq -r .runner "$SCRATCH/att.json")" "dependency-revie
 echo "--- sourcing guard ---"
 ok "sourcing ran nothing" "$(bash -c "source '$DEP'; echo loaded" 2>&1 | tail -1)" "loaded"
 
+echo "--- a missing library stops the script at once ---"
+mkdir -p "$SCRATCH/alone"
+cp "$DEP" "$SCRATCH/alone/"
+alone_rc=0
+alone_out=$(bash "$SCRATCH/alone/dependency-review-run.sh" 2>&1) || alone_rc=$?
+ok "it exits non-zero" "$([[ $alone_rc -ne 0 ]] && echo yes || echo no)" "yes"
+ok "it runs nothing past the source line" "$(grep -c 'command not found' <<< "$alone_out")" "0"
+
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]
