@@ -192,6 +192,9 @@ ok "says when there is no evidence" "$(has "No evidence was gathered")" "yes"
 P=$(dependency_prompt /ws "$SHA" yo61/demo 12 "  $EVIDENCE_DIR/ci-checks.json")
 ok "lists the evidence it was given" "$(has "$EVIDENCE_DIR/ci-checks.json")" "yes"
 ok "marks the evidence untrusted" "$(has "also UNTRUSTED")" "yes"
+ok "explains the release-range file" "$(has "release-range-<package>.md")" "yes"
+ok "names the completeness marker" "$(has '"This list is complete."')" "yes"
+ok "says an unlisted version alone is no hold" "$(has "not by itself a reason for needs-human")" "yes"
 
 # ── attestation ──────────────────────────────────────────────────────────
 echo "--- write_attestation ---"

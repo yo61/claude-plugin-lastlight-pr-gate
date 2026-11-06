@@ -124,6 +124,10 @@ and the upstream comparison between the two versions. Use it as you would the PR
 ${listing}
 A CI result or log here answers a check the Renovate config asks for (for example a
 render diff or a drift check) when it shows that check ran on this head and passed.
+A release-range-<package>.md file, written by the evidence gatherer, lists the GitHub
+releases between the two versions. When it contains the line "This list is complete.", a
+version number it does not list has no GitHub release notes to read, and their absence is
+not by itself a reason for needs-human. The upstream comparison still shows what changed.
 SECTION
 }
 
