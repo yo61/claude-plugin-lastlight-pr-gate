@@ -232,8 +232,9 @@ and `<out-dir>/attestation.json`, reviewing under the same sandbox as the PR rev
 
 `--evidence` hands the reviewer files gathered outside the sandbox, which has no network:
 CI results and logs, upstream release notes, the upstream comparison, and a
-`release-range-<package>.md` saying which releases the range holds and whether that list is
-complete, so a version number upstream skipped is not taken for missing notes. The directory may
+`release-range-<package>.md` listing the GitHub releases in the range. When it says
+`This list is complete.`, a version number it leaves out has no notes to read, so the reviewer
+does not hold the PR for them alone. The directory may
 hold only plain files with plain names: at most 50 files, 256 KiB each and 2 MiB in all.
 They are staged untrusted beside the PR body, and their names and contents are hashed
 into the attestation's `evidenceHash` before the reviewer runs.
@@ -332,7 +333,7 @@ for t in tests/*.test.sh; do bash "$t"; done
 
 | suite | cases | covers |
 |---|---|---|
-| `dependency-review-run.test.sh` | 82 | argument checks, the head-SHA binding, the verdict contract, the evidence contract, the prompt, the attestation, a missing library |
+| `dependency-review-run.test.sh` | 83 | argument checks, the head-SHA binding, the verdict contract, the evidence contract, the prompt, the attestation, a missing library |
 | `lastlight-review-gate.test.sh` | 245 | what is gated, what is allowed through |
 | `lastlight-review-record.test.sh` | 16 | the pass bar and the attestation binding |
 | `lastlight-review-run.test.sh` | 133 | flag parsing, the prompt, the defaults, the tool allowlist and the spellings it grants, and what may cross back out of the sandbox |
