@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/yo61/claude-plugin-lastlight-pr-gate/compare/v0.4.1...v0.5.0) (2026-11-06)
+
+
+### Features
+
+* **dependency-review:** trust a complete release list over a version gap ([#49](https://github.com/yo61/claude-plugin-lastlight-pr-gate/issues/49)) ([6f7468c](https://github.com/yo61/claude-plugin-lastlight-pr-gate/commit/6f7468cad777f92eba26c8dceb5f618cfcf5cc3d))
+
 ## [0.4.1](https://github.com/yo61/claude-plugin-lastlight-pr-gate/compare/v0.4.0...v0.4.1) (2026-11-03)
 
 
