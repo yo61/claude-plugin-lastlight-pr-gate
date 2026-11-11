@@ -114,7 +114,7 @@ jobs:
       - uses: j178/prek-action@44924fe9ef4a6f88253c4b6b1bf11c689d3ce53d  # v3.1.0
         env:
           # renovate: datasource=github-releases depName=j178/prek extractVersion=^v(?<version>.+)$
-          PREK_VERSION: 0.5.9
+          PREK_VERSION: 0.5.10
           # jactionlint's online rules (yo61/global decisions/2026-10-17-retire-zizmor.md).
           JACTIONLINT_ONLINE: 1
           GITHUB_TOKEN: ${{ github.token }}
