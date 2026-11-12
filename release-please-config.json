@@ -3,6 +3,7 @@
   "include-v-in-tag": true,
   "include-component-in-tag": false,
   "release-type": "simple",
+  "exclude-paths": ["knowledge", "decisions", "quality"],
   "packages": {
     ".": {
       "package-name": "lastlight-pr-gate",
